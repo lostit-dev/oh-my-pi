@@ -37,10 +37,12 @@ function countLines(text: string): number {
 	return text.split("\n").length;
 }
 
-function formatMetadataLine(lineCount: number, language: string | undefined): string {
+function formatMetadataLine(lineCount: number | null, language: string | undefined): string {
 	const icon = theme.getLangIcon(language);
-	const langLabel = language ?? "text";
-	return theme.fg("dim", `${icon} ${lineCount} lines`);
+	if (lineCount !== null) {
+		return theme.fg("dim", `${icon} ${lineCount} lines`);
+	}
+	return theme.fg("dim", `${icon}`);
 }
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "tiff"]);
@@ -763,11 +765,8 @@ export class ToolExecutionComponent extends Container {
 				} else {
 					// Text file - show line count and language on same line
 					const lang = getLanguageFromPath(rawPath);
-					const lineCount = countLines(output);
 					const lines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
-					const langIcon = theme.getLangIcon(lang);
-
-					text += `${theme.sep.dot}${theme.fg("dim", `${langIcon} ${lineCount} lines`)}`;
+					text += `${theme.sep.dot}${formatMetadataLine(null, lang)}`;
 
 					// Content is hidden by default, only shown when expanded
 					if (this.expanded) {

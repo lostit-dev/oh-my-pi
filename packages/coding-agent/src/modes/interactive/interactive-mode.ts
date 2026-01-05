@@ -29,12 +29,12 @@ import type { CustomToolSessionEvent, LoadedCustomTool } from "../../core/custom
 import type { HookUIContext } from "../../core/hooks/index";
 import { createCompactionSummaryMessage } from "../../core/messages";
 import { getRecentSessions, type SessionContext, SessionManager } from "../../core/session-manager";
-import { registerAsyncCleanup } from "../cleanup";
 import { generateSessionTitle, setTerminalTitle } from "../../core/title-generator";
 import type { TruncationResult } from "../../core/tools/truncate";
 import { disableProvider, enableProvider } from "../../discovery";
 import { getChangelogPath, parseChangelog } from "../../utils/changelog";
 import { copyToClipboard, readImageFromClipboard } from "../../utils/clipboard";
+import { registerAsyncCleanup } from "../cleanup";
 import { ArminComponent } from "./components/armin";
 import { AssistantMessageComponent } from "./components/assistant-message";
 import { BashExecutionComponent } from "./components/bash-execution";

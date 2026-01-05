@@ -55,7 +55,7 @@ export class BashExecutionComponent extends Container {
 			ui,
 			(spinner) => theme.fg("bashMode", spinner),
 			(text) => theme.fg("muted", text),
-			"Running${theme.format.ellipsis} (esc to cancel)",
+			`Running${theme.format.ellipsis} (esc to cancel)`,
 			getSymbolTheme().spinnerFrames,
 		);
 		this.contentContainer.addChild(this.loader);
