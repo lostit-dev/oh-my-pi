@@ -1,6 +1,3 @@
-import { TOOL_REMAP_MESSAGE } from "./prompts/codex";
-import { CODEX_PI_BRIDGE } from "./prompts/pi-codex-bridge";
-
 export interface ReasoningConfig {
 	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 	summary: "auto" | "concise" | "detailed" | "off" | "on";
@@ -38,6 +35,7 @@ export interface RequestBody {
 	};
 	include?: string[];
 	prompt_cache_key?: string;
+	prompt_cache_retention?: "in_memory" | "24h";
 	max_output_tokens?: number;
 	max_completion_tokens?: number;
 	[key: string]: unknown;
@@ -159,10 +157,10 @@ function getReasoningConfig(modelName: string | undefined, options: CodexRequest
 	const defaultEffort: ReasoningConfig["effort"] = isCodexMini
 		? "medium"
 		: supportsXhigh
-		? "high"
-		: isLightweight
-		? "minimal"
-		: "medium";
+			? "high"
+			: isLightweight
+				? "minimal"
+				: "medium";
 
 	let effort = options.reasoningEffort || defaultEffort;
 
@@ -210,74 +208,25 @@ function filterInput(input: InputItem[] | undefined): InputItem[] | undefined {
 		});
 }
 
-function addCodexBridgeMessage(
-	input: InputItem[] | undefined,
-	hasTools: boolean,
-	systemPrompt?: string
-): InputItem[] | undefined {
-	if (!hasTools || !Array.isArray(input)) return input;
-
-	const bridgeText = systemPrompt ? `${CODEX_PI_BRIDGE}\n\n${systemPrompt}` : CODEX_PI_BRIDGE;
-
-	const bridgeMessage: InputItem = {
-		type: "message",
-		role: "developer",
-		content: [
-			{
-				type: "input_text",
-				text: bridgeText,
-			},
-		],
-	};
-
-	return [bridgeMessage, ...input];
-}
-
-function addToolRemapMessage(input: InputItem[] | undefined, hasTools: boolean): InputItem[] | undefined {
-	if (!hasTools || !Array.isArray(input)) return input;
-
-	const toolRemapMessage: InputItem = {
-		type: "message",
-		role: "developer",
-		content: [
-			{
-				type: "input_text",
-				text: TOOL_REMAP_MESSAGE,
-			},
-		],
-	};
-
-	return [toolRemapMessage, ...input];
-}
-
 export async function transformRequestBody(
 	body: RequestBody,
-	codexInstructions: string,
 	options: CodexRequestOptions = {},
-	codexMode = true,
-	systemPrompt?: string
+	prompt?: { instructions: string; developerMessages: string[] },
 ): Promise<RequestBody> {
 	const normalizedModel = normalizeModel(body.model);
 
 	body.model = normalizedModel;
 	body.store = false;
 	body.stream = true;
-	body.instructions = codexInstructions;
 
 	if (body.input && Array.isArray(body.input)) {
 		body.input = filterInput(body.input);
-
-		if (codexMode) {
-			body.input = addCodexBridgeMessage(body.input, !!body.tools, systemPrompt);
-		} else {
-			body.input = addToolRemapMessage(body.input, !!body.tools);
-		}
 
 		if (body.input) {
 			const functionCallIds = new Set(
 				body.input
 					.filter((item) => item.type === "function_call" && typeof item.call_id === "string")
-					.map((item) => item.call_id as string)
+					.map((item) => item.call_id as string),
 			);
 
 			body.input = body.input.map((item) => {
@@ -308,11 +257,27 @@ export async function transformRequestBody(
 		}
 	}
 
-	const reasoningConfig = getReasoningConfig(normalizedModel, options);
-	body.reasoning = {
-		...body.reasoning,
-		...reasoningConfig,
-	};
+	if (prompt?.developerMessages && prompt.developerMessages.length > 0 && Array.isArray(body.input)) {
+		const developerMessages = prompt.developerMessages.map(
+			(text) =>
+				({
+					type: "message",
+					role: "developer",
+					content: [{ type: "input_text", text }],
+				}) as InputItem,
+		);
+		body.input = [...developerMessages, ...body.input];
+	}
+
+	if (options.reasoningEffort !== undefined) {
+		const reasoningConfig = getReasoningConfig(normalizedModel, options);
+		body.reasoning = {
+			...body.reasoning,
+			...reasoningConfig,
+		};
+	} else {
+		delete body.reasoning;
+	}
 
 	body.text = {
 		...body.text,

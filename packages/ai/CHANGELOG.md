@@ -1,14 +1,15 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added `sessionId` option for session-based prompt caching in providers that support it
 - Added Google Vertex AI provider with Gemini 1.5, 2.0, 2.5, and 3.0 model support
 - Added GPT-5 series models (gpt-5, gpt-5.1, gpt-5.2 and variants) to OpenAI Codex provider
 
 ### Changed
 
+- Changed reasoning configuration to only apply when explicitly specified, removing automatic defaults
 - Changed default reasoning summary from `auto` to `detailed` for OpenAI Codex provider
 
 ## [3.20.1] - 2026-01-06

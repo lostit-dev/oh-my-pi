@@ -33,6 +33,8 @@ import {
 	URL_PATHS,
 } from "./openai-codex/constants";
 import { getCodexInstructions } from "./openai-codex/prompts/codex";
+import { buildCodexPiBridge } from "./openai-codex/prompts/pi-codex-bridge";
+import { buildCodexSystemPrompt } from "./openai-codex/prompts/system-prompt";
 import {
 	type CodexRequestOptions,
 	normalizeModel,
@@ -94,6 +96,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 				model: model.id,
 				input: messages,
 				stream: true,
+				prompt_cache_key: options?.sessionId,
 			};
 
 			if (options?.maxTokens) {
@@ -110,6 +113,15 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 
 			const normalizedModel = normalizeModel(params.model);
 			const codexInstructions = await getCodexInstructions(normalizedModel);
+			const bridgeText = buildCodexPiBridge(context.tools);
+			const systemPrompt = buildCodexSystemPrompt({
+				codexInstructions,
+				bridgeText,
+				userSystemPrompt: context.systemPrompt,
+			});
+
+			params.model = normalizedModel;
+			params.instructions = systemPrompt.instructions;
 
 			const codexOptions: CodexRequestOptions = {
 				reasoningEffort: options?.reasoningEffort,
@@ -118,17 +130,14 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 				include: options?.include,
 			};
 
-			const transformedBody = await transformRequestBody(
-				params,
-				codexInstructions,
-				codexOptions,
-				options?.codexMode ?? true,
-			);
+			const transformedBody = await transformRequestBody(params, codexOptions, systemPrompt);
 
-			const headers = createCodexHeaders(model.headers, accountId, apiKey, transformedBody.prompt_cache_key);
+			const reasoningEffort = transformedBody.reasoning?.effort ?? null;
+			const headers = createCodexHeaders(model.headers, accountId, apiKey, options?.sessionId);
 			logCodexDebug("codex request", {
 				url,
 				model: params.model,
+				reasoningEffort,
 				headers: redactHeaders(headers),
 			});
 
@@ -406,11 +415,11 @@ function logCodexDebug(message: string, details?: Record<string, unknown>): void
 
 function redactHeaders(headers: Headers): Record<string, string> {
 	const redacted: Record<string, string> = {};
-	headers.forEach((value, key) => {
+	for (const [key, value] of headers.entries()) {
 		const lower = key.toLowerCase();
 		if (lower === "authorization") {
 			redacted[key] = "Bearer [redacted]";
-			return;
+			continue;
 		}
 		if (
 			lower.includes("account") ||
@@ -419,10 +428,10 @@ function redactHeaders(headers: Headers): Record<string, string> {
 			lower === "cookie"
 		) {
 			redacted[key] = "[redacted]";
-			return;
+			continue;
 		}
 		redacted[key] = value;
-	});
+	}
 	return redacted;
 }
 
