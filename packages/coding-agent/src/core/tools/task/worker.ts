@@ -24,7 +24,11 @@ import type { SubagentWorkerRequest, SubagentWorkerResponse, SubagentWorkerStart
 type PostMessageFn = (message: SubagentWorkerResponse) => void;
 
 const postMessageSafe: PostMessageFn = (message) => {
-	(globalThis as typeof globalThis & { postMessage: PostMessageFn }).postMessage(message);
+	try {
+		(globalThis as typeof globalThis & { postMessage: PostMessageFn }).postMessage(message);
+	} catch {
+		// Parent may have terminated worker, nothing we can do
+	}
 };
 
 interface WorkerMessageEvent<T> {
@@ -51,7 +55,9 @@ const isAgentEvent = (event: AgentSessionEvent): event is AgentEvent => {
 
 let running = false;
 let abortRequested = false;
+let doneSent = false;
 let activeSession: { abort: () => Promise<void>; dispose: () => Promise<void> } | null = null;
+let unsubscribe: (() => void) | null = null;
 
 /**
  * Resolve model string to Model object with optional thinking level.
@@ -145,6 +151,17 @@ async function runTask(payload: SubagentWorkerStartPayload): Promise<void> {
 
 		activeSession = session;
 
+		if (abortRequested) {
+			aborted = true;
+			exitCode = 1;
+			try {
+				await session.abort();
+			} catch {
+				// Ignore abort errors
+			}
+			return;
+		}
+
 		// Initialize extensions (equivalent to CLI's extension initialization)
 		// Note: Does not support --extension CLI flag or extension CLI flags
 		const extensionRunner = session.extensionRunner;
@@ -174,7 +191,7 @@ async function runTask(payload: SubagentWorkerStartPayload): Promise<void> {
 		let completeCalled = false;
 
 		// Subscribe to events and forward to parent (equivalent to --mode json output)
-		session.subscribe((event: AgentSessionEvent) => {
+		unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 			if (isAgentEvent(event)) {
 				postMessageSafe({ type: "event", event });
 				// Track when complete tool is called
@@ -222,24 +239,39 @@ Call complete now.`;
 			if (exitCode === 0) exitCode = 1;
 		}
 
-		// Cleanup session
-		if (activeSession) {
+		if (unsubscribe) {
 			try {
-				await activeSession.dispose();
+				unsubscribe();
+			} catch {
+				// Ignore unsubscribe errors
+			}
+			unsubscribe = null;
+		}
+
+		// Cleanup session with timeout to prevent hanging
+		if (activeSession) {
+			const session = activeSession;
+			activeSession = null;
+			try {
+				await Promise.race([session.dispose(), new Promise<void>((resolve) => setTimeout(resolve, 5000))]);
 			} catch {
 				// Ignore cleanup errors
 			}
-			activeSession = null;
 		}
 
-		// Send completion message to parent
-		postMessageSafe({
-			type: "done",
-			exitCode,
-			durationMs: Date.now() - startTime,
-			error,
-			aborted,
-		});
+		running = false;
+
+		// Send completion message to parent (only once)
+		if (!doneSent) {
+			doneSent = true;
+			postMessageSafe({
+				type: "done",
+				exitCode,
+				durationMs: Date.now() - startTime,
+				error,
+				aborted,
+			});
+		}
 	}
 }
 
@@ -250,6 +282,64 @@ function handleAbort(): void {
 		void activeSession.abort();
 	}
 }
+
+// Global error handlers to ensure we always send a done message
+// Using self instead of globalThis for proper worker scope typing
+declare const self: {
+	addEventListener(type: "error", listener: (event: ErrorEvent) => void): void;
+	addEventListener(type: "unhandledrejection", listener: (event: { reason: unknown }) => void): void;
+	addEventListener(type: "messageerror", listener: (event: MessageEvent) => void): void;
+};
+
+self.addEventListener("error", (event) => {
+	if (!running || doneSent) return;
+	doneSent = true;
+	abortRequested = true;
+	if (activeSession) {
+		void activeSession.abort();
+	}
+	postMessageSafe({
+		type: "done",
+		exitCode: 1,
+		durationMs: 0,
+		error: `Uncaught error: ${event.message || "Unknown error"}`,
+		aborted: false,
+	});
+});
+
+self.addEventListener("unhandledrejection", (event) => {
+	if (!running || doneSent) return;
+	doneSent = true;
+	abortRequested = true;
+	if (activeSession) {
+		void activeSession.abort();
+	}
+	const reason = event.reason;
+	const message = reason instanceof Error ? reason.stack || reason.message : String(reason);
+	postMessageSafe({
+		type: "done",
+		exitCode: 1,
+		durationMs: 0,
+		error: `Unhandled rejection: ${message}`,
+		aborted: false,
+	});
+});
+
+self.addEventListener("messageerror", () => {
+	if (doneSent) return;
+	doneSent = true;
+	abortRequested = true;
+	if (activeSession) {
+		void activeSession.abort();
+	}
+	postMessageSafe({
+		type: "done",
+		exitCode: 1,
+		durationMs: 0,
+		error: "Failed to deserialize parent message",
+		aborted: false,
+	});
+});
 
 // Message handler - receives start/abort commands from parent
 globalThis.addEventListener("message", (event: WorkerMessageEvent<SubagentWorkerRequest>) => {

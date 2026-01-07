@@ -74,7 +74,7 @@ export function createCompleteTool(session: ToolSession) {
 	const dataSchema = normalizedSchema
 		? Type.Unsafe({
 				...(normalizedSchema as object),
-				description: "Structured output matching the schema:\n" + schemaHint,
+				description: `Structured output matching the schema:\n${schemaHint}`,
 			})
 		: Type.Any({ description: "Structured JSON output (no schema specified)" });
 

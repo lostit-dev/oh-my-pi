@@ -311,10 +311,10 @@ async function findReadPathSuggestions(
 	return { suggestions, scopeLabel, truncated };
 }
 
-function convertWithMarkitdown(filePath: string): { content: string; ok: boolean; error?: string } {
-	const cmd = Bun.which("markitdown");
+async function convertWithMarkitdown(filePath: string): Promise<{ content: string; ok: boolean; error?: string }> {
+	const cmd = await ensureTool("markitdown", true);
 	if (!cmd) {
-		return { content: "", ok: false, error: "markitdown not found" };
+		return { content: "", ok: false, error: "markitdown not found (uv/pip unavailable)" };
 	}
 
 	const result = Bun.spawnSync([cmd, filePath], {
@@ -449,7 +449,7 @@ export function createReadTool(session: ToolSession): AgentTool<typeof readSchem
 					}
 				} else if (CONVERTIBLE_EXTENSIONS.has(ext)) {
 					// Convert document via markitdown
-					const result = convertWithMarkitdown(absolutePath);
+					const result = await convertWithMarkitdown(absolutePath);
 					if (result.ok) {
 						// Apply truncation to converted content
 						const truncation = truncateHead(result.content);

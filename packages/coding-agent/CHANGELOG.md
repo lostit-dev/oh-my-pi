@@ -1,12 +1,21 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added specialized web-fetch handlers for 50+ platforms including GitHub, GitLab, npm, PyPI, crates.io, Stack Overflow, Wikipedia, arXiv, PubMed, Hacker News, Reddit, Mastodon, Bluesky, and many more
 - Added automatic yt-dlp installation for YouTube transcript extraction
 - Added YouTube video support with automatic transcript extraction via yt-dlp
+
+### Changed
+
+- Changed task executor to gracefully handle worker termination with proper cleanup and timeout handling
+
+### Fixed
+
+- Fixed task worker error handling to prevent hanging on worker crashes, uncaught errors, and unhandled rejections
+- Fixed double-stringified JSON output from subagents being returned as escaped strings instead of parsed objects
+- Fixed markitdown tool installation to use automatic tool installer instead of requiring manual installation
 
 ## [3.25.0] - 2026-01-07
 ### Added

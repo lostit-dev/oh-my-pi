@@ -207,13 +207,39 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const sessionFile = subtaskSessionFile ?? options.sessionFile ?? null;
 	const spawnsEnv = agent.spawns === undefined ? "" : agent.spawns === "*" ? "*" : agent.spawns.join(",");
 
-	const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+	let worker: Worker;
+	try {
+		worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+	} catch (err) {
+		return {
+			index,
+			taskId,
+			agent: agent.name,
+			agentSource: agent.source,
+			task,
+			description: options.description,
+			exitCode: 1,
+			output: "",
+			stderr: `Failed to create worker: ${err instanceof Error ? err.message : String(err)}`,
+			truncated: false,
+			durationMs: Date.now() - startTime,
+			tokens: 0,
+			modelOverride,
+			error: `Failed to create worker: ${err instanceof Error ? err.message : String(err)}`,
+		};
+	}
 
 	let output = "";
 	let stderr = "";
 	let finalOutput = "";
 	let resolved = false;
 	let pendingTermination = false; // Set when shouldTerminate fires, wait for message_end
+	type AbortReason = "signal" | "terminate";
+	let abortSent = false;
+	let abortReason: AbortReason | undefined;
+	let abortTerminateTimer: ReturnType<typeof setTimeout> | undefined;
+	let pendingTerminationTimer: ReturnType<typeof setTimeout> | undefined;
+	let finalize: ((message: Extract<SubagentWorkerResponse, { type: "done" }>) => void) | null = null;
 
 	// Accumulate usage incrementally from message_end events (no memory for streaming events)
 	const accumulatedUsage = {
@@ -226,22 +252,55 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	};
 	let hasUsage = false;
 
-	let abortSent = false;
-	const requestAbort = () => {
-		if (abortSent) return;
+	const clearTimers = (): void => {
+		if (abortTerminateTimer) clearTimeout(abortTerminateTimer);
+		abortTerminateTimer = undefined;
+		if (pendingTerminationTimer) clearTimeout(pendingTerminationTimer);
+		pendingTerminationTimer = undefined;
+	};
+
+	const requestAbort = (reason: AbortReason) => {
+		if (abortSent) {
+			if (reason === "signal" && abortReason !== "signal") {
+				abortReason = "signal";
+			}
+			return;
+		}
+		if (resolved) return;
 		abortSent = true;
+		abortReason = reason;
+		if (pendingTerminationTimer) clearTimeout(pendingTerminationTimer);
+		pendingTerminationTimer = undefined;
 		const abortMessage: SubagentWorkerRequest = { type: "abort" };
-		worker.postMessage(abortMessage);
-		setTimeout(() => {
+		try {
+			worker.postMessage(abortMessage);
+		} catch {
+			// Worker already terminated, nothing to do
+		}
+		if (abortTerminateTimer) clearTimeout(abortTerminateTimer);
+		abortTerminateTimer = setTimeout(() => {
 			if (!resolved) {
-				worker.terminate();
+				try {
+					worker.terminate();
+				} catch {
+					// Ignore termination errors
+				}
+				if (finalize && !resolved) {
+					finalize({
+						type: "done",
+						exitCode: 1,
+						durationMs: Date.now() - startTime,
+						error: reason === "signal" ? "Aborted" : "Worker terminated after tool completion",
+						aborted: reason === "signal",
+					});
+				}
 			}
 		}, 2000);
 	};
 
 	// Handle abort signal
 	const onAbort = () => {
-		if (!resolved) requestAbort();
+		if (!resolved) requestAbort("signal");
 	};
 	if (signal) {
 		signal.addEventListener("abort", onAbort, { once: true });
@@ -349,9 +408,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						// Don't terminate immediately - wait for message_end to get token counts
 						pendingTermination = true;
 						// Safety timeout in case message_end never arrives
-						setTimeout(() => {
+						if (pendingTerminationTimer) clearTimeout(pendingTerminationTimer);
+						pendingTerminationTimer = setTimeout(() => {
 							if (!resolved) {
-								requestAbort();
+								requestAbort("terminate");
 							}
 						}, 2000);
 					}
@@ -421,7 +481,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 				// If pending termination, now we have tokens - terminate
 				if (pendingTermination && !resolved) {
-					requestAbort();
+					requestAbort("terminate");
 				}
 				break;
 			}
@@ -469,38 +529,96 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 
 	const done = await new Promise<Extract<SubagentWorkerResponse, { type: "done" }>>((resolve) => {
+		const cleanup = () => {
+			worker.removeEventListener("message", onMessage);
+			worker.removeEventListener("error", onError);
+			worker.removeEventListener("close", onClose);
+			worker.removeEventListener("messageerror", onMessageError);
+			clearTimers();
+		};
+		finalize = (message) => {
+			if (resolved) return;
+			resolved = true;
+			cleanup();
+			resolve(message);
+		};
 		const onMessage = (event: WorkerMessageEvent<SubagentWorkerResponse>) => {
 			const message = event.data;
 			if (!message || resolved) return;
 			if (message.type === "event") {
-				processEvent(message.event);
+				try {
+					processEvent(message.event);
+				} catch (err) {
+					finalize?.({
+						type: "done",
+						exitCode: 1,
+						durationMs: Date.now() - startTime,
+						error: `Failed to process worker event: ${err instanceof Error ? err.message : String(err)}`,
+					});
+				}
 				return;
 			}
 			if (message.type === "done") {
-				resolved = true;
-				resolve(message);
+				finalize?.(message);
 			}
 		};
 		const onError = (event: WorkerErrorEvent) => {
-			if (resolved) return;
-			resolved = true;
-			resolve({
+			finalize?.({
 				type: "done",
 				exitCode: 1,
 				durationMs: Date.now() - startTime,
 				error: event.message,
 			});
 		};
+		const onMessageError = () => {
+			finalize?.({
+				type: "done",
+				exitCode: 1,
+				durationMs: Date.now() - startTime,
+				error: "Worker message deserialization failed",
+			});
+		};
+		const onClose = () => {
+			// Worker terminated unexpectedly (crashed or was killed without sending done)
+			const abortMessage =
+				abortSent && abortReason === "signal"
+					? "Worker terminated after abort"
+					: abortSent
+						? "Worker terminated after tool completion"
+						: "Worker terminated unexpectedly";
+			finalize?.({
+				type: "done",
+				exitCode: 1,
+				durationMs: Date.now() - startTime,
+				error: abortMessage,
+				aborted: abortReason === "signal",
+			});
+		};
 		worker.addEventListener("message", onMessage);
 		worker.addEventListener("error", onError);
-		worker.postMessage(startMessage);
+		worker.addEventListener("close", onClose);
+		worker.addEventListener("messageerror", onMessageError);
+		try {
+			worker.postMessage(startMessage);
+		} catch (err) {
+			finalize({
+				type: "done",
+				exitCode: 1,
+				durationMs: Date.now() - startTime,
+				error: `Failed to start worker: ${err instanceof Error ? err.message : String(err)}`,
+			});
+		}
 	});
 
 	// Cleanup
 	if (signal) {
 		signal.removeEventListener("abort", onAbort);
 	}
-	worker.terminate();
+	try {
+		worker.terminate();
+	} catch {
+		// Ignore termination errors
+	}
 
 	let exitCode = done.exitCode;
 	if (done.error) {
@@ -528,7 +646,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 		} else {
 			// Normal successful completion
-			const completeData = lastComplete?.data ?? null;
+			let completeData = lastComplete?.data ?? null;
+			// Handle double-stringified JSON (subagent returned JSON string instead of object)
+			if (typeof completeData === "string" && (completeData.startsWith("{") || completeData.startsWith("["))) {
+				try {
+					completeData = JSON.parse(completeData);
+				} catch {
+					// Not valid JSON, keep as string
+				}
+			}
 			try {
 				rawOutput = JSON.stringify(completeData, null, 2) ?? "null";
 			} catch (err) {
