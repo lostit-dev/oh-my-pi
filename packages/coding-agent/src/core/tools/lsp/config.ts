@@ -3,6 +3,7 @@ import { basename, extname, join } from "node:path";
 import { globSync } from "glob";
 import { parse as parseYaml } from "yaml";
 import { getConfigDirPaths } from "../../../config";
+import { logger } from "../../logger";
 import { createBiomeClient } from "./clients/biome-client";
 import DEFAULTS from "./defaults.json" with { type: "json" };
 import type { ServerConfig } from "./types";
@@ -66,7 +67,7 @@ function normalizeServerConfig(name: string, config: Partial<ServerConfig>): Ser
 	const rootMarkers = normalizeStringArray(config.rootMarkers);
 
 	if (!command || !fileTypes || !rootMarkers) {
-		console.warn(`Ignoring invalid LSP server config "${name}" (missing required fields).`);
+		logger.warn("Ignoring invalid LSP server config (missing required fields).", { name });
 		return null;
 	}
 
@@ -120,7 +121,7 @@ function mergeServers(
 			if (normalized) {
 				merged[name] = normalized;
 			} else {
-				console.warn(`Ignoring invalid LSP overrides for "${name}" (keeping previous config).`);
+				logger.warn("Ignoring invalid LSP overrides (keeping previous config).", { name });
 			}
 		} else {
 			const normalized = normalizeServerConfig(name, config);
@@ -164,7 +165,7 @@ export async function hasRootMarkers(cwd: string, markers: string[]): Promise<bo
 					return true;
 				}
 			} catch {
-				console.warn(`Failed to resolve glob root marker "${marker}" in ${cwd}`);
+				logger.warn("Failed to resolve glob root marker.", { marker, cwd });
 			}
 			continue;
 		}
@@ -299,8 +300,11 @@ export async function loadConfig(cwd: string): Promise<LspConfig> {
 	for (const configPath of configPaths) {
 		const parsed = await readConfigFile(configPath);
 		if (!parsed) continue;
-		hasOverrides = true;
-		mergedServers = mergeServers(mergedServers, parsed.servers);
+		const hasServerOverrides = Object.keys(parsed.servers).length > 0;
+		if (hasServerOverrides) {
+			hasOverrides = true;
+			mergedServers = mergeServers(mergedServers, parsed.servers);
+		}
 		if (parsed.idleTimeoutMs !== undefined) {
 			idleTimeoutMs = parsed.idleTimeoutMs;
 		}

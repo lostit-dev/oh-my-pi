@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { logger } from "../../logger";
 import { applyWorkspaceEdit } from "./edits";
 import type {
 	Diagnostic,
@@ -364,7 +365,7 @@ async function sendResponse(
 	try {
 		await writeMessage(client.process.stdin as import("bun").FileSink, response);
 	} catch (err) {
-		console.error(`[LSP] Failed to respond to ${method}: ${err}`);
+		logger.error("LSP failed to respond.", { method, error: String(err) });
 	}
 }
 

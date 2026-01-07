@@ -1,8 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added upfront diff parsing and filtering for code review command to exclude lock files, generated code, and binary assets
+- Added automatic reviewer agent count recommendation based on diff weight and file count
+- Added file grouping guidance for parallel review distribution across multiple agents
+- Added diff preview mode for large changesets that exceed size thresholds
 - Added in-memory session storage implementation for testing and ephemeral sessions
 - Added `createToolUIKit` helper to consolidate common UI formatting utilities across tool renderers
 - Added configurable bash interceptor rules via `bashInterceptor.patterns` setting for custom command blocking
@@ -24,6 +29,10 @@
 
 ### Changed
 
+- Changed review command to parse git diff upfront and provide structured context to reviewer agents
+- Changed session persistence to use structured logging instead of console.error for persistence failures
+- Changed find tool to use fd command for .gitignore discovery instead of Bun.Glob for better abort handling
+- Changed LSP config loading to only mark overrides when servers are actually defined
 - Changed task tool to require explicit task `id` field instead of auto-generating names from agent type
 - Changed grep and find tools to use native Bun file APIs instead of Node.js fs module for improved performance
 - Changed YouTube scraper to use async command execution with proper stream handling
@@ -43,6 +52,8 @@
 
 ### Fixed
 
+- Fixed session persistence to call fsync before renaming temp file for durability
+- Fixed duplicate persistence error logging by tracking whether error was already reported
 - Fixed byte counting in task output truncation to correctly handle multi-byte Unicode characters
 - Fixed parallel task execution to propagate abort signals and fail fast on first error
 - Fixed task worker abort handling to properly clean up on cancellation

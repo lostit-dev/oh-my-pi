@@ -166,18 +166,38 @@ export function createFindTool(session: ToolSession): AgentTool<typeof findSchem
 				}
 
 				try {
-					const nestedGitignores = await Array.fromAsync(
-						new Bun.Glob("**/.gitignore").scan({ cwd: searchPath, dot: true, absolute: true }),
+					const gitignoreArgs = [
+						"--hidden",
+						"--no-ignore",
+						"--type",
+						"f",
+						"--name",
+						".gitignore",
+						"--exclude",
+						".git",
+						"--exclude",
+						"node_modules",
+						"--absolute-path",
+						searchPath,
+					];
+					const { stdout: gitignoreStdout, aborted: gitignoreAborted } = await captureCommandOutput(
+						fdPath,
+						gitignoreArgs,
+						signal,
 					);
-					for (const file of nestedGitignores) {
-						const normalized = file.replace(/\\/g, "/");
-						if (normalized.includes("/node_modules/") || normalized.includes("/.git/")) {
-							continue;
-						}
+					if (gitignoreAborted) {
+						throw new Error("Operation aborted");
+					}
+					for (const rawLine of gitignoreStdout.split("\n")) {
+						const file = rawLine.trim();
+						if (!file) continue;
 						gitignoreFiles.add(file);
 					}
-				} catch {
-					// Ignore glob errors
+				} catch (err) {
+					if (signal?.aborted) {
+						throw err instanceof Error ? err : new Error("Operation aborted");
+					}
+					// Ignore lookup errors
 				}
 
 				for (const gitignorePath of gitignoreFiles) {

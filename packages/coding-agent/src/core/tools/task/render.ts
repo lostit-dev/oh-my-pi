@@ -430,7 +430,7 @@ function renderReviewResult(
 		} else {
 			// Preview: first sentence or ~100 chars
 			const preview = truncate(`${summary.explanation.split(/[.!?]/)[0]}.`, 100, theme.format.ellipsis);
-			lines.push(`${continuePrefix}${theme.fg("dim", `Summary: ${preview}`)}`);
+			lines.push(`${continuePrefix}${theme.fg("dim", preview)}`);
 		}
 	}
 

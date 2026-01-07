@@ -4,6 +4,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { nanoid } from "nanoid";
 import { getAgentDir as getDefaultAgentDir } from "../config";
 import { resizeImage } from "../utils/image-resize";
+import { logger } from "./logger";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -847,6 +848,7 @@ export class SessionManager {
 	private persistWriterPath: string | undefined;
 	private persistChain: Promise<void> = Promise.resolve();
 	private persistError: Error | undefined;
+	private persistErrorReported = false;
 	private storage: SessionStorage;
 
 	private constructor(cwd: string, sessionDir: string, persist: boolean, storage: SessionStorage) {
@@ -874,6 +876,7 @@ export class SessionManager {
 	async setSessionFile(sessionFile: string): Promise<void> {
 		await this._closePersistWriter();
 		this.persistError = undefined;
+		this.persistErrorReported = false;
 		this.sessionFile = resolve(sessionFile);
 		if (this.storage.existsSync(this.sessionFile)) {
 			this.fileEntries = loadEntriesFromFile(this.sessionFile!, this.storage);
@@ -902,6 +905,7 @@ export class SessionManager {
 	private _newSessionSync(options?: NewSessionOptions): string | undefined {
 		this.persistChain = Promise.resolve();
 		this.persistError = undefined;
+		this.persistErrorReported = false;
 		this.sessionId = nanoid();
 		const timestamp = new Date().toISOString();
 		const header: SessionHeader = {
@@ -967,7 +971,14 @@ export class SessionManager {
 	private _recordPersistError(err: unknown): Error {
 		const normalized = toError(err);
 		if (!this.persistError) this.persistError = normalized;
-		console.error("Session persistence error:", normalized);
+		if (!this.persistErrorReported) {
+			this.persistErrorReported = true;
+			logger.error("Session persistence error.", {
+				sessionFile: this.sessionFile,
+				error: normalized.message,
+				stack: normalized.stack,
+			});
+		}
 		return normalized;
 	}
 
@@ -1023,6 +1034,7 @@ export class SessionManager {
 				await writer.write(entry);
 			}
 			await writer.flush();
+			await writer.fsync();
 			await writer.close();
 			await this.storage.rename(tempPath, this.sessionFile);
 			this.storage.fsyncDirSync(dir);

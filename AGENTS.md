@@ -264,6 +264,22 @@ npx mocha
 ```
 
 
+## Logging
+
+**NEVER use `console.log`, `console.error`, or `console.warn`** in the coding-agent package. Console output corrupts the TUI rendering.
+
+Use the centralized logger instead:
+
+```typescript
+import { logger } from "../core/logger";
+
+logger.error("MCP request failed", { url, method });
+logger.warn("Theme file invalid, using fallback", { path });
+logger.debug("LSP fallback triggered", { reason });
+```
+
+Logs go to `~/.omp/logs/omp.YYYY-MM-DD.log` with automatic rotation.
+
 ## Commands
 
 - After code changes: `bun run check` (runs biome + tsc, get full output, no tail)
