@@ -11,6 +11,7 @@ export type Mode = "text" | "json" | "rpc";
 
 export interface Args {
 	cwd?: string;
+	allowHome?: boolean;
 	provider?: string;
 	model?: string;
 	smol?: string;
@@ -62,6 +63,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.help = true;
 		} else if (arg === "--version" || arg === "-v") {
 			result.version = true;
+		} else if (arg === "--allow-home") {
+			result.allowHome = true;
 		} else if (arg === "--mode" && i + 1 < args.length) {
 			const mode = args[++i];
 			if (mode === "text" || mode === "json" || mode === "rpc") {
@@ -176,6 +179,7 @@ ${chalk.bold("Options:")}
   --api-key <key>                API key (defaults to env vars)
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt
+  --allow-home                   Allow starting in ~ without auto-switching to a temp dir
   --mode <mode>                  Output mode: text (default), json, or rpc
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session

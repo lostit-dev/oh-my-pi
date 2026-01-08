@@ -1129,6 +1129,24 @@ export class AgentSession {
 	}
 
 	/**
+	 * Set model temporarily (for this session only).
+	 * Validates API key, saves to session log but NOT to settings.
+	 * @throws Error if no API key available for the model
+	 */
+	async setModelTemporary(model: Model<any>): Promise<void> {
+		const apiKey = await this._modelRegistry.getApiKey(model);
+		if (!apiKey) {
+			throw new Error(`No API key for ${model.provider}/${model.id}`);
+		}
+
+		this.agent.setModel(model);
+		this.sessionManager.appendModelChange(`${model.provider}/${model.id}`, "temporary");
+
+		// Re-clamp thinking level for new model's capabilities
+		this.setThinkingLevel(this.thinkingLevel);
+	}
+
+	/**
 	 * Cycle to next/previous model.
 	 * Uses scoped models (from --models flag) if available, otherwise all available models.
 	 * @param direction - "forward" (default) or "backward"
@@ -1144,8 +1162,13 @@ export class AgentSession {
 	/**
 	 * Cycle through configured role models in a fixed order.
 	 * Skips missing roles and deduplicates models.
+	 * @param roleOrder - Order of roles to cycle through (e.g., ["slow", "default", "smol"])
+	 * @param options - Optional settings: `temporary` to not persist to settings
 	 */
-	async cycleRoleModels(roleOrder: string[]): Promise<RoleModelCycleResult | undefined> {
+	async cycleRoleModels(
+		roleOrder: string[],
+		options?: { temporary?: boolean },
+	): Promise<RoleModelCycleResult | undefined> {
 		const availableModels = this._modelRegistry.getAvailable();
 		if (availableModels.length === 0) return undefined;
 
@@ -1185,7 +1208,11 @@ export class AgentSession {
 		const nextIndex = (currentIndex + 1) % roleModels.length;
 		const next = roleModels[nextIndex];
 
-		await this.setModel(next.model, next.role);
+		if (options?.temporary) {
+			await this.setModelTemporary(next.model);
+		} else {
+			await this.setModel(next.model, next.role);
+		}
 
 		return { model: next.model, thinkingLevel: this.thinkingLevel, role: next.role };
 	}

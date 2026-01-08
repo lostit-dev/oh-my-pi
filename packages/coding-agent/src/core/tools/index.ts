@@ -18,7 +18,6 @@ export {
 	type LspServerStatus,
 	type LspToolDetails,
 	type LspWarmupResult,
-	lspTool,
 	warmupLspServers,
 } from "./lsp/index";
 export { createNotebookTool, type NotebookToolDetails } from "./notebook";
@@ -149,10 +148,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 
 	const entries = requestedTools
 		? requestedTools.filter((name) => name in allTools).map((name) => [name, allTools[name]] as const)
-		: [
-				...Object.entries(BUILTIN_TOOLS),
-				...(includeComplete ? ([["complete", HIDDEN_TOOLS.complete]] as const) : []),
-			];
+		: [...Object.entries(BUILTIN_TOOLS), ...(includeComplete ? ([["complete", HIDDEN_TOOLS.complete]] as const) : [])];
 	const results = await Promise.all(entries.map(([, factory]) => factory(session)));
 	const tools = results.filter((t): t is Tool => t !== null);
 

@@ -38,30 +38,40 @@ export class ExtensionDashboard extends Container {
 	private inspector: InspectorPanel;
 	private settingsManager: SettingsManager | null;
 	private cwd: string;
+	private terminalHeight: number;
 
 	public onClose?: () => void;
 
-	constructor(cwd: string, settingsManager: SettingsManager | null = null) {
+	constructor(cwd: string, settingsManager: SettingsManager | null = null, terminalHeight?: number) {
 		super();
 		this.cwd = cwd;
 		this.settingsManager = settingsManager;
+		this.terminalHeight = terminalHeight ?? process.stdout.rows ?? 24;
 		const disabledIds = settingsManager?.getDisabledExtensions() ?? [];
 		this.state = createInitialState(cwd, disabledIds);
 
+		// Calculate max visible items based on terminal height
+		// Reserve ~10 lines for header, tabs, help text, borders
+		const maxVisible = Math.max(5, Math.floor((this.terminalHeight - 10) / 2));
+
 		// Create main list - always focused
-		this.mainList = new ExtensionList(this.state.searchFiltered, {
-			onSelectionChange: (ext) => {
-				this.state.selected = ext;
-				this.inspector.setExtension(ext);
+		this.mainList = new ExtensionList(
+			this.state.searchFiltered,
+			{
+				onSelectionChange: (ext) => {
+					this.state.selected = ext;
+					this.inspector.setExtension(ext);
+				},
+				onToggle: (extensionId, enabled) => {
+					this.handleExtensionToggle(extensionId, enabled);
+				},
+				onMasterToggle: (providerId) => {
+					this.handleProviderToggle(providerId);
+				},
+				masterSwitchProvider: this.getActiveProviderId(),
 			},
-			onToggle: (extensionId, enabled) => {
-				this.handleExtensionToggle(extensionId, enabled);
-			},
-			onMasterToggle: (providerId) => {
-				this.handleProviderToggle(providerId);
-			},
-			masterSwitchProvider: this.getActiveProviderId(),
-		});
+			maxVisible,
+		);
 		this.mainList.setFocused(true);
 
 		// Create inspector
@@ -91,9 +101,10 @@ export class ExtensionDashboard extends Container {
 		this.addChild(new Text(this.renderTabBar(), 0, 0));
 		this.addChild(new Spacer(1));
 
-		// Help text
-		// 2-column body
-		this.addChild(new TwoColumnBody(this.mainList, this.inspector));
+		// 2-column body with height limit
+		// Reserve ~8 lines for header, tabs, help text, borders
+		const bodyMaxHeight = Math.max(5, this.terminalHeight - 8);
+		this.addChild(new TwoColumnBody(this.mainList, this.inspector, bodyMaxHeight));
 
 		this.addChild(new Spacer(1));
 		this.addChild(new Text(theme.fg("dim", " ↑/↓: navigate  Space: toggle  Tab: next provider  Esc: close"), 0, 0));
@@ -262,10 +273,12 @@ export class ExtensionDashboard extends Container {
 class TwoColumnBody implements Component {
 	private leftPane: ExtensionList;
 	private rightPane: InspectorPanel;
+	private maxHeight: number;
 
-	constructor(left: ExtensionList, right: InspectorPanel) {
+	constructor(left: ExtensionList, right: InspectorPanel, maxHeight: number) {
 		this.leftPane = left;
 		this.rightPane = right;
+		this.maxHeight = maxHeight;
 	}
 
 	render(width: number): string[] {
@@ -275,11 +288,12 @@ class TwoColumnBody implements Component {
 		const leftLines = this.leftPane.render(leftWidth);
 		const rightLines = this.rightPane.render(rightWidth);
 
-		const maxLines = Math.max(leftLines.length, rightLines.length);
+		// Limit to maxHeight lines
+		const numLines = Math.min(this.maxHeight, Math.max(leftLines.length, rightLines.length));
 		const combined: string[] = [];
 		const separator = theme.fg("dim", ` ${theme.boxSharp.vertical} `);
 
-		for (let i = 0; i < maxLines; i++) {
+		for (let i = 0; i < numLines; i++) {
 			const left = truncateToWidth(leftLines[i] ?? "", leftWidth);
 			const leftPadded = left + " ".repeat(Math.max(0, leftWidth - visibleWidth(left)));
 			const right = truncateToWidth(rightLines[i] ?? "", rightWidth);

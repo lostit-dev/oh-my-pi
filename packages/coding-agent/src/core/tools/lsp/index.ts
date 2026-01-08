@@ -1393,11 +1393,3 @@ export function createLspTool(session: ToolSession): AgentTool<typeof lspSchema,
 		},
 	};
 }
-
-export const lspTool = createLspTool({
-	cwd: process.cwd(),
-	hasUI: false,
-	rulebookRules: [],
-	getSessionFile: () => null,
-	getSessionSpawns: () => null,
-});

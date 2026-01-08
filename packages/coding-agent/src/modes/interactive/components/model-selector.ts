@@ -34,7 +34,7 @@ interface ScopedModelItem {
 	thinkingLevel: string;
 }
 
-type ModelRole = "default" | "smol" | "slow";
+type ModelRole = "default" | "smol" | "slow" | "temporary";
 
 interface MenuAction {
 	label: string;
@@ -75,6 +75,7 @@ export class ModelSelectorComponent extends Container {
 	private errorMessage?: string;
 	private tui: TUI;
 	private scopedModels: ReadonlyArray<ScopedModelItem>;
+	private temporaryOnly: boolean;
 
 	// Tab state
 	private providers: string[] = [ALL_TAB];
@@ -92,6 +93,7 @@ export class ModelSelectorComponent extends Container {
 		scopedModels: ReadonlyArray<ScopedModelItem>,
 		onSelect: (model: Model<any>, role: string) => void,
 		onCancel: () => void,
+		options?: { temporaryOnly?: boolean },
 	) {
 		super();
 
@@ -102,6 +104,7 @@ export class ModelSelectorComponent extends Container {
 		this.scopedModels = scopedModels;
 		this.onSelectCallback = onSelect;
 		this.onCancelCallback = onCancel;
+		this.temporaryOnly = options?.temporaryOnly ?? false;
 
 		// Load current role assignments from settings
 		this._loadRoleModels();
@@ -483,10 +486,16 @@ export class ModelSelectorComponent extends Container {
 			return;
 		}
 
-		// Enter - open context menu
+		// Enter - open context menu or select directly in temporary mode
 		if (isEnter(keyData)) {
-			if (this.filteredModels[this.selectedIndex]) {
-				this.openMenu();
+			const selectedModel = this.filteredModels[this.selectedIndex];
+			if (selectedModel) {
+				if (this.temporaryOnly) {
+					// In temporary mode, skip menu and select directly
+					this.handleSelect(selectedModel.model, "temporary");
+				} else {
+					this.openMenu();
+				}
 			}
 			return;
 		}
@@ -536,6 +545,12 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	private handleSelect(model: Model<any>, role: ModelRole): void {
+		// For temporary role, don't save to settings - just notify caller
+		if (role === "temporary") {
+			this.onSelectCallback(model, role);
+			return;
+		}
+
 		// Save to settings
 		this.settingsManager.setModelRole(role, `${model.provider}/${model.id}`);
 

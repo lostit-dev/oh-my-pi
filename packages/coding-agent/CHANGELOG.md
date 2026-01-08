@@ -4,7 +4,15 @@
 
 ### Added
 
+- Added temporary model selection: `Ctrl+Y` opens model selector for session-only model switching (not persisted to settings)
+- Added `setModelTemporary()` method to AgentSession for ephemeral model changes
+- Added empty Enter to flush queued messages: pressing Enter with empty editor while streaming aborts current stream
+- Added auto-chdir to temp directories when starting in home unless `--allow-home` is set
 - Added upfront diff parsing and filtering for code review command to exclude lock files, generated code, and binary assets
+
+### Fixed
+
+- Fixed auto-chdir to only use existing directories and fall back to `tmpdir()`
 - Added automatic reviewer agent count recommendation based on diff weight and file count
 - Added file grouping guidance for parallel review distribution across multiple agents
 - Added diff preview mode for large changesets that exceed size thresholds
@@ -29,6 +37,9 @@
 
 ### Changed
 
+- Changed `Ctrl+P` to cycle through role models (slow → default → smol) instead of all available models
+- Changed `Shift+Ctrl+P` to cycle role models temporarily (not persisted)
+- Changed Extension Control Center to scale with terminal height instead of fixed 25-line limit
 - Changed review command to parse git diff upfront and provide structured context to reviewer agents
 - Changed session persistence to use structured logging instead of console.error for persistence failures
 - Changed find tool to use fd command for .gitignore discovery instead of Bun.Glob for better abort handling

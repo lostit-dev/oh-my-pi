@@ -7,6 +7,8 @@
 
 import { type ImageContent, supportsXhigh } from "@mariozechner/pi-ai";
 import chalk from "chalk";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { type Args, parseArgs, printHelp } from "./cli/args";
 import { processFileArguments } from "./cli/file-processor";
 import { listModels } from "./cli/list-models";
@@ -187,6 +189,59 @@ async function createSessionManager(parsed: Args, cwd: string): Promise<SessionM
 	return undefined;
 }
 
+async function maybeAutoChdir(parsed: Args): Promise<void> {
+	if (parsed.allowHome || parsed.cwd) {
+		return;
+	}
+
+	const home = homedir();
+	if (!home) {
+		return;
+	}
+
+	const normalizePath = (value: string) => {
+		const resolved = resolve(value);
+		return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+	};
+
+	const cwd = normalizePath(process.cwd());
+	const normalizedHome = normalizePath(home);
+	if (cwd !== normalizedHome) {
+		return;
+	}
+
+	const isDirectory = async (path: string) => {
+		try {
+			const stat = await Bun.file(path).stat();
+			return stat.isDirectory();
+		} catch {
+			return false;
+		}
+	};
+
+	const candidates = [join(home, "tmp"), "/tmp", "/var/tmp"];
+	for (const candidate of candidates) {
+		try {
+			if (!(await isDirectory(candidate))) {
+				continue;
+			}
+			process.chdir(candidate);
+			return;
+		} catch {
+			// Try next candidate.
+		}
+	}
+
+	try {
+		const fallback = tmpdir();
+		if (fallback && normalizePath(fallback) !== cwd && (await isDirectory(fallback))) {
+			process.chdir(fallback);
+		}
+	} catch {
+		// Ignore fallback errors.
+	}
+}
+
 /** Discover SYSTEM.md file if no CLI system prompt was provided */
 function discoverSystemPromptFile(): string | undefined {
 	// Check project-local first (.omp/SYSTEM.md, .pi/SYSTEM.md legacy)
@@ -318,6 +373,10 @@ export async function main(args: string[]) {
 		return;
 	}
 
+	const parsed = parseArgs(args);
+	time("parseArgs");
+	await maybeAutoChdir(parsed);
+
 	// Run migrations (pass cwd for project-local migrations)
 	const { migratedAuthProviders: migratedProviders, deprecationWarnings } = await runMigrations(process.cwd());
 
@@ -325,9 +384,6 @@ export async function main(args: string[]) {
 	const authStorage = await discoverAuthStorage();
 	const modelRegistry = await discoverModels(authStorage);
 	time("discoverModels");
-
-	const parsed = parseArgs(args);
-	time("parseArgs");
 
 	if (parsed.version) {
 		console.log(VERSION);

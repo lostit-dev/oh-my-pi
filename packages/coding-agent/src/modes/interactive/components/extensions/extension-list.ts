@@ -31,7 +31,7 @@ export interface ExtensionListCallbacks {
 	masterSwitchProvider?: string | null;
 }
 
-const MAX_VISIBLE = 25;
+const DEFAULT_MAX_VISIBLE = 15;
 
 /** Flattened list item for rendering */
 type ListItem =
@@ -48,12 +48,19 @@ export class ExtensionList implements Component {
 	private focused = false;
 	private callbacks: ExtensionListCallbacks;
 	private masterSwitchProvider: string | null = null;
+	private maxVisible: number;
 
-	constructor(extensions: Extension[], callbacks: ExtensionListCallbacks = {}) {
+	constructor(extensions: Extension[], callbacks: ExtensionListCallbacks = {}, maxVisible?: number) {
 		this.extensions = extensions;
 		this.callbacks = callbacks;
 		this.masterSwitchProvider = callbacks.masterSwitchProvider ?? null;
+		this.maxVisible = maxVisible ?? DEFAULT_MAX_VISIBLE;
 		this.rebuildList();
+	}
+
+	setMaxVisible(maxVisible: number): void {
+		this.maxVisible = maxVisible;
+		this.clampSelection();
 	}
 
 	setExtensions(extensions: Extension[]): void {
@@ -126,7 +133,7 @@ export class ExtensionList implements Component {
 
 		// Calculate visible range
 		const startIdx = this.scrollOffset;
-		const endIdx = Math.min(startIdx + MAX_VISIBLE, this.listItems.length);
+		const endIdx = Math.min(startIdx + this.maxVisible, this.listItems.length);
 
 		// Render visible items
 		for (let i = startIdx; i < endIdx; i++) {
@@ -143,7 +150,7 @@ export class ExtensionList implements Component {
 		}
 
 		// Scroll indicator
-		if (this.listItems.length > MAX_VISIBLE) {
+		if (this.listItems.length > this.maxVisible) {
 			const indicator = theme.fg("muted", `  (${this.selectedIndex + 1}/${this.listItems.length})`);
 			lines.push(indicator);
 		}
@@ -388,8 +395,8 @@ export class ExtensionList implements Component {
 		// Adjust scroll offset
 		if (this.selectedIndex < this.scrollOffset) {
 			this.scrollOffset = this.selectedIndex;
-		} else if (this.selectedIndex >= this.scrollOffset + MAX_VISIBLE) {
-			this.scrollOffset = this.selectedIndex - MAX_VISIBLE + 1;
+		} else if (this.selectedIndex >= this.scrollOffset + this.maxVisible) {
+			this.scrollOffset = this.selectedIndex - this.maxVisible + 1;
 		}
 	}
 
@@ -470,8 +477,8 @@ export class ExtensionList implements Component {
 	private moveSelectionDown(): void {
 		if (this.selectedIndex < this.listItems.length - 1) {
 			this.selectedIndex++;
-			if (this.selectedIndex >= this.scrollOffset + MAX_VISIBLE) {
-				this.scrollOffset = this.selectedIndex - MAX_VISIBLE + 1;
+			if (this.selectedIndex >= this.scrollOffset + this.maxVisible) {
+				this.scrollOffset = this.selectedIndex - this.maxVisible + 1;
 			}
 			this.notifySelectionChange();
 		}

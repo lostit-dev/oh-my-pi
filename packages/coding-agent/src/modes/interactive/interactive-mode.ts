@@ -942,9 +942,9 @@ export class InteractiveMode {
 		this.editor.onCtrlD = () => this.handleCtrlD();
 		this.editor.onCtrlZ = () => this.handleCtrlZ();
 		this.editor.onShiftTab = () => this.cycleThinkingLevel();
-		this.editor.onCtrlP = () => this.cycleModel("forward");
-		this.editor.onShiftCtrlP = () => this.cycleModel("backward");
-		this.editor.onCtrlY = () => this.cycleRoleModel();
+		this.editor.onCtrlP = () => this.cycleRoleModel();
+		this.editor.onShiftCtrlP = () => this.cycleRoleModel({ temporary: true });
+		this.editor.onCtrlY = () => this.showModelSelector({ temporaryOnly: true });
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
@@ -952,9 +952,6 @@ export class InteractiveMode {
 		this.editor.onCtrlO = () => this.toggleToolOutputExpansion();
 		this.editor.onCtrlT = () => this.toggleThinkingBlockVisibility();
 		this.editor.onCtrlG = () => this.openExternalEditor();
-		this.editor.onCtrlY = () => {
-			void this.toggleVoiceListening();
-		};
 		this.editor.onQuestionMark = () => this.handleHotkeysCommand();
 		this.editor.onCtrlV = () => this.handleImagePaste();
 
@@ -992,6 +989,14 @@ export class InteractiveMode {
 	private setupEditorSubmitHandler(): void {
 		this.editor.onSubmit = async (text: string) => {
 			text = text.trim();
+
+			// Empty submit while streaming with queued messages: flush queues immediately
+			if (!text && this.session.isStreaming && this.session.queuedMessageCount > 0) {
+				// Abort current stream and let queued messages be processed
+				await this.session.abort();
+				return;
+			}
+
 			if (!text) return;
 
 			// Handle slash commands
@@ -1995,27 +2000,9 @@ export class InteractiveMode {
 		}
 	}
 
-	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
+	private async cycleRoleModel(options?: { temporary?: boolean }): Promise<void> {
 		try {
-			const result = await this.session.cycleModel(direction);
-			if (result === undefined) {
-				const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
-				this.showStatus(msg);
-			} else {
-				this.statusLine.invalidate();
-				this.updateEditorBorderColor();
-				const thinkingStr =
-					result.model.reasoning && result.thinkingLevel !== "off" ? ` (thinking: ${result.thinkingLevel})` : "";
-				this.showStatus(`Switched to ${result.model.name || result.model.id}${thinkingStr}`);
-			}
-		} catch (error) {
-			this.showError(error instanceof Error ? error.message : String(error));
-		}
-	}
-
-	private async cycleRoleModel(): Promise<void> {
-		try {
-			const result = await this.session.cycleRoleModels(["slow", "default", "smol"]);
+			const result = await this.session.cycleRoleModels(["slow", "default", "smol"], options);
 			if (!result) {
 				this.showStatus("Only one role model available");
 				return;
@@ -2026,7 +2013,8 @@ export class InteractiveMode {
 			const roleLabel = result.role === "default" ? "default" : result.role;
 			const thinkingStr =
 				result.model.reasoning && result.thinkingLevel !== "off" ? ` (thinking: ${result.thinkingLevel})` : "";
-			this.showStatus(`Switched to ${roleLabel}: ${result.model.name || result.model.id}${thinkingStr}`);
+			const tempLabel = options?.temporary ? " (temporary)" : "";
+			this.showStatus(`Switched to ${roleLabel}: ${result.model.name || result.model.id}${thinkingStr}${tempLabel}`);
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
@@ -2256,7 +2244,7 @@ export class InteractiveMode {
 	 */
 	private showExtensionsDashboard(): void {
 		this.showSelector((done) => {
-			const dashboard = new ExtensionDashboard(process.cwd(), this.settingsManager);
+			const dashboard = new ExtensionDashboard(process.cwd(), this.settingsManager, this.ui.terminal.rows);
 			dashboard.onClose = () => {
 				done();
 				this.ui.requestRender();
@@ -2380,7 +2368,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private showModelSelector(): void {
+	private showModelSelector(options?: { temporaryOnly?: boolean }): void {
 		this.showSelector((done) => {
 			const selector = new ModelSelectorComponent(
 				this.ui,
@@ -2390,24 +2378,36 @@ export class InteractiveMode {
 				this.session.scopedModels,
 				async (model, role) => {
 					try {
-						// Only update agent state for default role
-						if (role === "default") {
+						if (role === "temporary") {
+							// Temporary: update agent state but don't persist to settings
+							await this.session.setModelTemporary(model);
+							this.statusLine.invalidate();
+							this.updateEditorBorderColor();
+							this.showStatus(`Temporary model: ${model.id}`);
+							done();
+							this.ui.requestRender();
+						} else if (role === "default") {
+							// Default: update agent state and persist
 							await this.session.setModel(model, role);
 							this.statusLine.invalidate();
 							this.updateEditorBorderColor();
+							this.showStatus(`Default model: ${model.id}`);
+							// Don't call done() - selector stays open for role assignment
+						} else {
+							// Other roles (smol, slow): just update settings, not current model
+							const roleLabel = role === "smol" ? "Smol" : role;
+							this.showStatus(`${roleLabel} model: ${model.id}`);
+							// Don't call done() - selector stays open
 						}
-						// For other roles (small), just show status - settings already updated by selector
-						const roleLabel = role === "default" ? "Default" : role === "smol" ? "Smol" : role;
-						this.showStatus(`${roleLabel} model: ${model.id}`);
 					} catch (error) {
 						this.showError(error instanceof Error ? error.message : String(error));
 					}
-					// Don't call done() - selector stays open
 				},
 				() => {
 					done();
 					this.ui.requestRender();
 				},
+				options,
 			);
 			return { component: selector, focus: selector };
 		});
@@ -2995,8 +2995,10 @@ export class InteractiveMode {
 | \`Ctrl+D\` | Exit (when editor is empty) |
 | \`Ctrl+Z\` | Suspend to background |
 | \`Shift+Tab\` | Cycle thinking level |
-| \`Ctrl+P\` | Cycle models |
-| \`Ctrl+Y\` | Cycle role models (slow/default/smol) |
+| \`Ctrl+P\` | Cycle role models (slow/default/smol) |
+| \`Shift+Ctrl+P\` | Cycle role models (temporary) |
+| \`Ctrl+Y\` | Select model (temporary) |
+| \`Ctrl+L\` | Select model (set roles) |
 | \`Ctrl+O\` | Toggle tool output expansion |
 | \`Ctrl+T\` | Toggle thinking block visibility |
 | \`Ctrl+G\` | Edit message in external editor |
