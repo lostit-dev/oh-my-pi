@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.31.0] - 2026-01-08
+
 ### Added
 
 - Added temporary model selection: `Ctrl+Y` opens model selector for session-only model switching (not persisted to settings)
