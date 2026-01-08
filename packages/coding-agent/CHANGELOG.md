@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [3.32.0] - 2026-01-08
 ### Added
 
 - Added progress indicator when starting LSP servers at session startup
