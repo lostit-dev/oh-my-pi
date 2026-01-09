@@ -18,6 +18,7 @@ import type {
 	ToolCall,
 } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode";
 import type { GoogleThinkingLevel } from "./google-gemini-cli";
 import {
@@ -262,7 +263,7 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 				}
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMessage = formatErrorMessageWithRetryAfter(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

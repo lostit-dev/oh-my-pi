@@ -24,6 +24,7 @@ import type {
 } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
+import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode";
 
 import { transformMessages } from "./transorm-messages";
@@ -279,7 +280,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 		} catch (error) {
 			for (const block of output.content) delete (block as any).index;
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMessage = formatErrorMessageWithRetryAfter(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

@@ -369,20 +369,23 @@ export class ToolExecutionComponent extends Container {
 			this.contentBox.setBgFn(bgFn);
 			this.contentBox.clear();
 
-			// Render call component
-			try {
-				const callComponent = renderer.renderCall(this.args, theme);
-				if (callComponent) {
-					// Ensure component has invalidate() method for Component interface
-					const component = callComponent as any;
-					if (!component.invalidate) {
-						component.invalidate = () => {};
+			const shouldRenderCall = !this.result || !renderer.mergeCallAndResult;
+			if (shouldRenderCall) {
+				// Render call component
+				try {
+					const callComponent = renderer.renderCall(this.args, theme);
+					if (callComponent) {
+						// Ensure component has invalidate() method for Component interface
+						const component = callComponent as any;
+						if (!component.invalidate) {
+							component.invalidate = () => {};
+						}
+						this.contentBox.addChild(component);
 					}
-					this.contentBox.addChild(component);
+				} catch {
+					// Fall back to default on error
+					this.contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.toolLabel)), 0, 0));
 				}
-			} catch {
-				// Fall back to default on error
-				this.contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.toolLabel)), 0, 0));
 			}
 
 			// Render result component if we have a result

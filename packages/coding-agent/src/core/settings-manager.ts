@@ -371,7 +371,8 @@ export class SettingsManager {
 	private settingsPath: string | null;
 	private cwd: string | null;
 	private globalSettings: Settings;
-	private settings: Settings;
+	private overrides: Settings;
+	private settings!: Settings;
 	private persist: boolean;
 
 	private constructor(settingsPath: string | null, cwd: string | null, initialSettings: Settings, persist: boolean) {
@@ -379,8 +380,8 @@ export class SettingsManager {
 		this.cwd = cwd;
 		this.persist = persist;
 		this.globalSettings = initialSettings;
-		const projectSettings = this.loadProjectSettings();
-		this.settings = normalizeSettings(deepMergeSettings(this.globalSettings, projectSettings));
+		this.overrides = {};
+		this.rebuildSettings();
 
 		// Apply environment variables from settings
 		this.applyEnvironmentVariables();
@@ -474,9 +475,17 @@ export class SettingsManager {
 		return SettingsManager.migrateSettings(merged as Record<string, unknown>);
 	}
 
+	private rebuildSettings(projectSettings?: Settings): void {
+		const resolvedProjectSettings = projectSettings ?? this.loadProjectSettings();
+		this.settings = normalizeSettings(
+			deepMergeSettings(deepMergeSettings(this.globalSettings, resolvedProjectSettings), this.overrides),
+		);
+	}
+
 	/** Apply additional overrides on top of current settings */
 	applyOverrides(overrides: Partial<Settings>): void {
-		this.settings = normalizeSettings(deepMergeSettings(this.settings, overrides));
+		this.overrides = deepMergeSettings(this.overrides, overrides);
+		this.rebuildSettings();
 	}
 
 	private save(): void {
@@ -491,9 +500,9 @@ export class SettingsManager {
 			// Save only global settings (project settings are read-only)
 			writeFileSync(this.settingsPath, JSON.stringify(this.globalSettings, null, 2), "utf-8");
 
-			// Re-merge project settings into active settings
+			// Re-merge project settings into active settings (preserve overrides)
 			const projectSettings = this.loadProjectSettings();
-			this.settings = normalizeSettings(deepMergeSettings(this.globalSettings, projectSettings));
+			this.rebuildSettings(projectSettings);
 		} catch (error) {
 			console.error(`Warning: Could not save settings file: ${error}`);
 		}
@@ -523,6 +532,11 @@ export class SettingsManager {
 			this.globalSettings.modelRoles = {};
 		}
 		this.globalSettings.modelRoles[role] = model;
+
+		if (this.overrides.modelRoles && this.overrides.modelRoles[role] !== undefined) {
+			this.overrides.modelRoles[role] = model;
+		}
+
 		this.save();
 	}
 

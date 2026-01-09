@@ -38,6 +38,7 @@ import { VoiceSupervisor } from "../../core/voice-supervisor";
 import { disableProvider, enableProvider } from "../../discovery";
 import { getChangelogPath, parseChangelog } from "../../utils/changelog";
 import { copyToClipboard, readImageFromClipboard } from "../../utils/clipboard";
+import { resizeImage } from "../../utils/image-resize";
 import { registerAsyncCleanup } from "../cleanup";
 import { ArminComponent } from "./components/armin";
 import { AssistantMessageComponent } from "./components/assistant-message";
@@ -1139,7 +1140,9 @@ export class InteractiveMode {
 			if (this.session.isStreaming) {
 				this.editor.addToHistory(text);
 				this.editor.setText("");
-				await this.session.prompt(text, { streamingBehavior: "steer" });
+				const images = this.pendingImages.length > 0 ? [...this.pendingImages] : undefined;
+				this.pendingImages = [];
+				await this.session.prompt(text, { streamingBehavior: "steer", images });
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
 				return;
@@ -1504,22 +1507,24 @@ export class InteractiveMode {
 	 * If multiple status messages are emitted back-to-back (without anything else being added to the chat),
 	 * we update the previous status line instead of appending new ones to avoid log spam.
 	 */
-	private showStatus(message: string): void {
+	private showStatus(message: string, options?: { dim?: boolean }): void {
 		if (this.isBackgrounded) {
 			return;
 		}
 		const children = this.chatContainer.children;
 		const last = children.length > 0 ? children[children.length - 1] : undefined;
 		const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
+		const useDim = options?.dim ?? true;
+		const rendered = useDim ? theme.fg("dim", message) : message;
 
 		if (last && secondLast && last === this.lastStatusText && secondLast === this.lastStatusSpacer) {
-			this.lastStatusText.setText(theme.fg("dim", message));
+			this.lastStatusText.setText(rendered);
 			this.ui.requestRender();
 			return;
 		}
 
 		const spacer = new Spacer(1);
-		const text = new Text(theme.fg("dim", message), 1, 0);
+		const text = new Text(rendered, 1, 0);
 		this.chatContainer.addChild(spacer);
 		this.chatContainer.addChild(text);
 		this.lastStatusSpacer = spacer;
@@ -1822,10 +1827,24 @@ export class InteractiveMode {
 		try {
 			const image = await readImageFromClipboard();
 			if (image) {
+				let imageData = image;
+				if (this.settingsManager.getImageAutoResize()) {
+					try {
+						const resized = await resizeImage({
+							type: "image",
+							data: image.data,
+							mimeType: image.mimeType,
+						});
+						imageData = { data: resized.data, mimeType: resized.mimeType };
+					} catch {
+						imageData = image;
+					}
+				}
+
 				this.pendingImages.push({
 					type: "image",
-					data: image.data,
-					mimeType: image.mimeType,
+					data: imageData.data,
+					mimeType: imageData.mimeType,
 				});
 				// Insert styled placeholder at cursor like Claude does
 				const imageNum = this.pendingImages.length;
@@ -1980,7 +1999,8 @@ export class InteractiveMode {
 
 	private async cycleRoleModel(options?: { temporary?: boolean }): Promise<void> {
 		try {
-			const result = await this.session.cycleRoleModels(["slow", "default", "smol"], options);
+			const roleOrder = ["slow", "default", "smol"];
+			const result = await this.session.cycleRoleModels(roleOrder, options);
 			if (!result) {
 				this.showStatus("Only one role model available");
 				return;
@@ -1989,10 +2009,24 @@ export class InteractiveMode {
 			this.statusLine.invalidate();
 			this.updateEditorBorderColor();
 			const roleLabel = result.role === "default" ? "default" : result.role;
+			const roleLabelStyled = theme.bold(theme.fg("accent", roleLabel));
 			const thinkingStr =
 				result.model.reasoning && result.thinkingLevel !== "off" ? ` (thinking: ${result.thinkingLevel})` : "";
 			const tempLabel = options?.temporary ? " (temporary)" : "";
-			this.showStatus(`Switched to ${roleLabel}: ${result.model.name || result.model.id}${thinkingStr}${tempLabel}`);
+			const cycleSeparator = theme.fg("dim", " > ");
+			const cycleLabel = roleOrder
+				.map((role) => {
+					if (role === result.role) {
+						return theme.bold(theme.fg("accent", role));
+					}
+					return theme.fg("muted", role);
+				})
+				.join(cycleSeparator);
+			const orderLabel = ` (cycle: ${cycleLabel})`;
+			this.showStatus(
+				`Switched to ${roleLabelStyled}: ${result.model.name || result.model.id}${thinkingStr}${tempLabel}${orderLabel}`,
+				{ dim: false },
+			);
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}

@@ -633,6 +633,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const contextFiles = options.contextFiles ?? discoverContextFiles(cwd, agentDir);
 	time("discoverContextFiles");
 
+	let agent: Agent;
+	let session: AgentSession;
+
 	const toolSession: ToolSession = {
 		cwd,
 		hasUI: options.hasUI ?? false,
@@ -643,6 +646,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		getSessionFile: () => sessionManager.getSessionFile() ?? null,
 		getSessionSpawns: () => options.spawns ?? "*",
 		getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
+		getActiveModelString: () => {
+			const activeModel = agent?.state.model;
+			return activeModel ? formatModelString(activeModel) : undefined;
+		},
 		settings: settingsManager,
 	};
 
@@ -782,8 +789,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionRunner = new ExtensionRunner(extensionsResult.extensions, cwd, sessionManager, modelRegistry);
 	}
 
-	let agent: Agent;
-	let session: AgentSession;
 	const getSessionContext = () => ({
 		sessionManager,
 		modelRegistry,

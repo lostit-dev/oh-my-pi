@@ -18,6 +18,7 @@ import type {
 	ToolCall,
 } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode";
 import {
 	convertMessages,
@@ -638,7 +639,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				}
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMessage = formatErrorMessageWithRetryAfter(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

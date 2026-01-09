@@ -196,7 +196,7 @@ export function createGrepTool(session: ToolSession): AgentTool<typeof grepSchem
 					args.push("--type", type);
 				}
 
-				args.push(pattern, searchPath);
+				args.push("--", pattern, searchPath);
 
 				const child: Subprocess = Bun.spawn([rgPath, ...args], {
 					stdin: "ignore",

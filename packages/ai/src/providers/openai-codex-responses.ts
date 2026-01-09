@@ -24,6 +24,7 @@ import type {
 } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
+import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode";
 import {
 	CODEX_BASE_URL,
@@ -151,7 +152,9 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 
 			if (!response.ok) {
 				const info = await parseCodexError(response);
-				throw new Error(info.friendlyMessage || info.message);
+				const error = new Error(info.friendlyMessage || info.message);
+				(error as { headers?: Headers }).headers = response.headers;
+				throw error;
 			}
 
 			if (!response.body) {
@@ -362,7 +365,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 		} catch (error) {
 			for (const block of output.content) delete (block as { index?: number }).index;
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMessage = formatErrorMessageWithRetryAfter(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

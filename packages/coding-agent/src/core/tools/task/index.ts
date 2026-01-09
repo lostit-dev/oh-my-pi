@@ -135,7 +135,12 @@ export async function createTaskTool(
 			const startTime = Date.now();
 			const { agents, projectAgentsDir } = await discoverAgents(session.cwd);
 			const { agent: agentName, context, model, output: outputSchema } = params;
-			const modelOverride = model ?? session.getModelString?.();
+
+			const isDefaultModelAlias = (value: string | undefined): boolean => {
+				if (!value) return true;
+				const normalized = value.trim().toLowerCase();
+				return normalized === "default" || normalized === "pi/default" || normalized === "omp/default";
+			};
 
 			// Validate agent exists
 			const agent = getAgent(agents, agentName);
@@ -155,6 +160,10 @@ export async function createTaskTool(
 					},
 				};
 			}
+
+			const shouldInheritSessionModel = model === undefined && isDefaultModelAlias(agent.model);
+			const sessionModel = shouldInheritSessionModel ? session.getActiveModelString?.() : undefined;
+			const modelOverride = model ?? sessionModel ?? session.getModelString?.();
 
 			// Handle empty or missing tasks
 			if (!params.tasks || params.tasks.length === 0) {

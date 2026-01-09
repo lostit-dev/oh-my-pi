@@ -1338,6 +1338,21 @@ export class SessionManager {
 		return this.leafId ? this.byId.get(this.leafId) : undefined;
 	}
 
+	/**
+	 * Get the most recent model role from the current session path.
+	 * Returns undefined if no model change has been recorded.
+	 */
+	getLastModelChangeRole(): string | undefined {
+		let current = this.getLeafEntry();
+		while (current) {
+			if (current.type === "model_change") {
+				return current.role ?? "default";
+			}
+			current = current.parentId ? this.byId.get(current.parentId) : undefined;
+		}
+		return undefined;
+	}
+
 	getEntry(id: string): SessionEntry | undefined {
 		return this.byId.get(id);
 	}

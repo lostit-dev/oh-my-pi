@@ -459,7 +459,10 @@ export class AgentSession {
 		const content = message.content;
 		if (typeof content === "string") return content;
 		const textBlocks = content.filter((c) => c.type === "text");
-		return textBlocks.map((c) => (c as TextContent).text).join("");
+		const text = textBlocks.map((c) => (c as TextContent).text).join("");
+		if (text.length > 0) return text;
+		const hasImages = content.some((c) => c.type === "image");
+		return hasImages ? "[Image]" : "";
 	}
 
 	/** Find the last assistant message in agent state (including aborted ones) */
@@ -722,9 +725,9 @@ export class AgentSession {
 				);
 			}
 			if (options.streamingBehavior === "followUp") {
-				await this._queueFollowUp(expandedText);
+				await this._queueFollowUp(expandedText, options?.images);
 			} else {
-				await this._queueSteer(expandedText);
+				await this._queueSteer(expandedText, options?.images);
 			}
 			return;
 		}
@@ -953,11 +956,16 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private async _queueSteer(text: string): Promise<void> {
-		this._steeringMessages.push(text);
+	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
+		this._steeringMessages.push(displayText);
+		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
+		if (images && images.length > 0) {
+			content.push(...images);
+		}
 		this.agent.steer({
 			role: "user",
-			content: [{ type: "text", text }],
+			content,
 			timestamp: Date.now(),
 		});
 	}
@@ -965,11 +973,16 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private async _queueFollowUp(text: string): Promise<void> {
-		this._followUpMessages.push(text);
+	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+		const displayText = text || (images && images.length > 0 ? "[Image]" : "");
+		this._followUpMessages.push(displayText);
+		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
+		if (images && images.length > 0) {
+			content.push(...images);
+		}
 		this.agent.followUp({
 			role: "user",
-			content: [{ type: "text", text }],
+			content,
 			timestamp: Date.now(),
 		});
 	}
@@ -1175,7 +1188,7 @@ export class AgentSession {
 
 	/**
 	 * Cycle through configured role models in a fixed order.
-	 * Skips missing roles and deduplicates models.
+	 * Skips missing roles.
 	 * @param roleOrder - Order of roles to cycle through (e.g., ["slow", "default", "smol"])
 	 * @param options - Optional settings: `temporary` to not persist to settings
 	 */
@@ -1189,7 +1202,6 @@ export class AgentSession {
 		const currentModel = this.model;
 		if (!currentModel) return undefined;
 		const roleModels: Array<{ role: string; model: Model<any> }> = [];
-		const seen = new Set<string>();
 
 		for (const role of roleOrder) {
 			const roleModelStr =
@@ -1208,15 +1220,15 @@ export class AgentSession {
 			}
 			if (!match) continue;
 
-			const key = `${match.provider}/${match.id}`;
-			if (seen.has(key)) continue;
-			seen.add(key);
 			roleModels.push({ role, model: match });
 		}
 
 		if (roleModels.length <= 1) return undefined;
 
-		let currentIndex = roleModels.findIndex((entry) => modelsAreEqual(entry.model, currentModel));
+		const lastRole = this.sessionManager.getLastModelChangeRole();
+		let currentIndex = lastRole
+			? roleModels.findIndex((entry) => entry.role === lastRole)
+			: roleModels.findIndex((entry) => modelsAreEqual(entry.model, currentModel));
 		if (currentIndex === -1) currentIndex = 0;
 
 		const nextIndex = (currentIndex + 1) % roleModels.length;
@@ -1558,6 +1570,60 @@ export class AgentSession {
 		}
 	}
 
+	private _getModelKey(model: Model<any>): string {
+		return `${model.provider}/${model.id}`;
+	}
+
+	private _resolveRoleModel(
+		role: string,
+		availableModels: Model<any>[],
+		currentModel: Model<any> | undefined,
+	): Model<any> | undefined {
+		const roleModelStr =
+			role === "default"
+				? (this.settingsManager.getModelRole("default") ??
+					(currentModel ? `${currentModel.provider}/${currentModel.id}` : undefined))
+				: this.settingsManager.getModelRole(role);
+
+		if (!roleModelStr) return undefined;
+
+		const parsed = parseModelString(roleModelStr);
+		if (parsed) {
+			return availableModels.find((m) => m.provider === parsed.provider && m.id === parsed.id);
+		}
+		const roleLower = roleModelStr.toLowerCase();
+		return availableModels.find((m) => m.id.toLowerCase() === roleLower);
+	}
+
+	private _getCompactionModelCandidates(availableModels: Model<any>[]): Model<any>[] {
+		const candidates: Model<any>[] = [];
+		const seen = new Set<string>();
+
+		const addCandidate = (model: Model<any> | undefined): void => {
+			if (!model) return;
+			const key = this._getModelKey(model);
+			if (seen.has(key)) return;
+			seen.add(key);
+			candidates.push(model);
+		};
+
+		const currentModel = this.model;
+		addCandidate(this._resolveRoleModel("default", availableModels, currentModel));
+		addCandidate(this._resolveRoleModel("slow", availableModels, currentModel));
+		addCandidate(this._resolveRoleModel("small", availableModels, currentModel));
+		addCandidate(this._resolveRoleModel("smol", availableModels, currentModel));
+
+		const sortedByContext = [...availableModels].sort((a, b) => b.contextWindow - a.contextWindow);
+		for (const model of sortedByContext) {
+			if (!seen.has(this._getModelKey(model))) {
+				addCandidate(model);
+				break;
+			}
+		}
+
+		return candidates;
+	}
+
 	/**
 	 * Internal: Run auto-compaction with events.
 	 */
@@ -1577,8 +1643,8 @@ export class AgentSession {
 				return;
 			}
 
-			const apiKey = await this._modelRegistry.getApiKey(this.model);
-			if (!apiKey) {
+			const availableModels = this._modelRegistry.getAvailable();
+			if (availableModels.length === 0) {
 				this._emit({ type: "auto_compaction_end", result: undefined, aborted: false, willRetry: false });
 				return;
 			}
@@ -1626,14 +1692,68 @@ export class AgentSession {
 				tokensBefore = hookCompaction.tokensBefore;
 				details = hookCompaction.details;
 			} else {
-				// Generate compaction result
-				const compactResult = await compact(
-					preparation,
-					this.model,
-					apiKey,
-					undefined,
-					this._autoCompactionAbortController.signal,
-				);
+				const candidates = this._getCompactionModelCandidates(availableModels);
+				const retrySettings = this.settingsManager.getRetrySettings();
+				let compactResult: CompactionResult | undefined;
+				let lastError: unknown;
+
+				for (const candidate of candidates) {
+					const apiKey = await this._modelRegistry.getApiKey(candidate);
+					if (!apiKey) continue;
+
+					let attempt = 0;
+					while (true) {
+						try {
+							compactResult = await compact(
+								preparation,
+								candidate,
+								apiKey,
+								undefined,
+								this._autoCompactionAbortController.signal,
+							);
+							break;
+						} catch (error) {
+							if (this._autoCompactionAbortController.signal.aborted) {
+								throw error;
+							}
+
+							const message = error instanceof Error ? error.message : String(error);
+							const retryAfterMs = this._parseRetryAfterMsFromError(message);
+							const shouldRetry =
+								retrySettings.enabled &&
+								attempt < retrySettings.maxRetries &&
+								(retryAfterMs !== undefined || this._isRetryableErrorMessage(message));
+							if (!shouldRetry) {
+								lastError = error;
+								break;
+							}
+
+							const baseDelayMs = retrySettings.baseDelayMs * 2 ** attempt;
+							const delayMs = retryAfterMs !== undefined ? Math.max(baseDelayMs, retryAfterMs) : baseDelayMs;
+							attempt++;
+							logger.warn("Auto-compaction failed, retrying", {
+								attempt,
+								maxRetries: retrySettings.maxRetries,
+								delayMs,
+								retryAfterMs,
+								error: message,
+							});
+							await new Promise((resolve) => setTimeout(resolve, delayMs));
+						}
+					}
+
+					if (compactResult) {
+						break;
+					}
+				}
+
+				if (!compactResult) {
+					if (lastError) {
+						throw lastError;
+					}
+					throw new Error("Compaction failed: no available model");
+				}
+
 				summary = compactResult.summary;
 				firstKeptEntryId = compactResult.firstKeptEntryId;
 				tokensBefore = compactResult.tokensBefore;
@@ -1725,10 +1845,59 @@ export class AgentSession {
 		if (isContextOverflow(message, contextWindow)) return false;
 
 		const err = message.errorMessage;
+		return this._isRetryableErrorMessage(err);
+	}
+
+	private _isRetryableErrorMessage(errorMessage: string): boolean {
 		// Match: overloaded_error, rate limit, 429, 500, 502, 503, 504, service unavailable, connection error
 		return /overloaded|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server error|internal error|connection.?error/i.test(
-			err,
+			errorMessage,
 		);
+	}
+
+	private _parseRetryAfterMsFromError(errorMessage: string): number | undefined {
+		const now = Date.now();
+		const retryAfterMsMatch = /retry-after-ms\s*[:=]\s*(\d+)/i.exec(errorMessage);
+		if (retryAfterMsMatch) {
+			return Math.max(0, Number(retryAfterMsMatch[1]));
+		}
+
+		const retryAfterMatch = /retry-after\s*[:=]\s*([^\s,;]+)/i.exec(errorMessage);
+		if (retryAfterMatch) {
+			const value = retryAfterMatch[1];
+			const seconds = Number(value);
+			if (!Number.isNaN(seconds)) {
+				return Math.max(0, seconds * 1000);
+			}
+			const dateMs = Date.parse(value);
+			if (!Number.isNaN(dateMs)) {
+				return Math.max(0, dateMs - now);
+			}
+		}
+
+		const resetMsMatch = /x-ratelimit-reset-ms\s*[:=]\s*(\d+)/i.exec(errorMessage);
+		if (resetMsMatch) {
+			const resetMs = Number(resetMsMatch[1]);
+			if (!Number.isNaN(resetMs)) {
+				if (resetMs > 1_000_000_000_000) {
+					return Math.max(0, resetMs - now);
+				}
+				return Math.max(0, resetMs);
+			}
+		}
+
+		const resetMatch = /x-ratelimit-reset\s*[:=]\s*(\d+)/i.exec(errorMessage);
+		if (resetMatch) {
+			const resetSeconds = Number(resetMatch[1]);
+			if (!Number.isNaN(resetSeconds)) {
+				if (resetSeconds > 1_000_000_000) {
+					return Math.max(0, resetSeconds * 1000 - now);
+				}
+				return Math.max(0, resetSeconds * 1000);
+			}
+		}
+
+		return undefined;
 	}
 
 	/**

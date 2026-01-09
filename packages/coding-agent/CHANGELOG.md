@@ -1,6 +1,28 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added retry logic with exponential backoff for auto-compaction failures
+- Added fallback to alternative models when auto-compaction fails with the primary model
+- Added support for `pi/<role>` model aliases in task tool (e.g., `pi/slow`, `pi/default`)
+- Added visual cycle indicator when switching between role models showing available roles
+- Added automatic model inheritance for subtasks when parent uses default model
+- Added `--` separator in grep tool to prevent pattern interpretation as flags
+
+### Changed
+
+- Changed role model cycling to remember last selected role instead of matching current model
+- Changed edit tool to merge call and result displays into single block
+- Changed model override behavior to persist in settings when explicitly set via CLI
+
+### Fixed
+
+- Fixed retry-after parsing from error messages supporting multiple header formats (retry-after, retry-after-ms, x-ratelimit-reset)
+- Fixed image attachments being dropped when steering/follow-up messages are queued during streaming
+- Fixed image auto-resize not applying to clipboard images before sending
+- Fixed clipboard image attachments being dropped when steering/follow-up messages are queued while streaming
+- Fixed clipboard image attachments ignoring the auto-resize setting before sending
 
 ## [3.34.0] - 2026-01-09
 

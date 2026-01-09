@@ -31,6 +31,7 @@ type ToolRenderer = {
 		theme: Theme,
 		args?: unknown,
 	) => Component;
+	mergeCallAndResult?: boolean;
 };
 
 export const toolRenderers: Record<string, ToolRenderer> = {

@@ -289,6 +289,9 @@ async function buildSessionOptions(
 			process.exit(1);
 		}
 		options.model = model;
+		settingsManager.applyOverrides({
+			modelRoles: { default: `${model.provider}/${model.id}` },
+		});
 	} else if (scopedModels.length > 0 && !parsed.continue && !parsed.resume) {
 		options.model = scopedModels[0].model;
 	}

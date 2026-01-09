@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Enhanced error messages to include retry-after timing information from API rate limit headers
 
 ## [3.34.0] - 2026-01-09
 

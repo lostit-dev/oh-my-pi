@@ -8,7 +8,7 @@
  *   - Fuzzy match: "opus" → "p-anthropic/claude-opus-4-5"
  *   - Comma fallback: "gpt, opus" → tries gpt first, then opus
  *   - "default" → undefined (use system default)
- *   - "omp/slow" → configured slow model from settings
+ *   - "omp/slow" or "pi/slow" → configured slow model from settings
  */
 
 import { type Settings, settingsCapability } from "../../../capability/settings";
@@ -145,9 +145,10 @@ export function resolveModelPattern(pattern: string | undefined, availableModels
 		.filter(Boolean);
 
 	for (const p of patterns) {
-		// Handle omp/<role> aliases - looks up role in settings.modelRoles
-		if (p.toLowerCase().startsWith("omp/")) {
-			const role = p.slice(4); // Remove "omp/" prefix
+		// Handle omp/<role> or pi/<role> aliases - looks up role in settings.modelRoles
+		const lower = p.toLowerCase();
+		if (lower.startsWith("omp/") || lower.startsWith("pi/")) {
+			const role = lower.startsWith("omp/") ? p.slice(4) : p.slice(3);
 			const resolved = resolveOmpAlias(role, models);
 			if (resolved) return resolved;
 			continue; // Role not configured, try next pattern

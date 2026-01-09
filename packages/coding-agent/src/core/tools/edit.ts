@@ -229,6 +229,7 @@ function formatMetadataLine(lineCount: number | null, language: string | undefin
 }
 
 export const editToolRenderer = {
+	mergeCallAndResult: true,
 	renderCall(args: EditRenderArgs, uiTheme: Theme): Component {
 		const ui = createToolUIKit(uiTheme);
 		const rawPath = args.file_path || args.path || "";
