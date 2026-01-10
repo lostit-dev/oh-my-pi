@@ -1,9 +1,9 @@
 import { existsSync, type FSWatcher, readFileSync, watch } from "node:fs";
-import { homedir } from "node:os";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { dirname, join } from "path";
 import type { AgentSession } from "../../../core/agent-session";
+import { shortenPath } from "../../../core/tools/render-utils";
 import { theme } from "../theme/theme";
 
 /**
@@ -200,11 +200,7 @@ export class FooterComponent implements Component {
 		};
 
 		// Replace home directory with ~
-		let pwd = process.cwd();
-		const home = homedir();
-		if (home && pwd.startsWith(home)) {
-			pwd = `~${pwd.slice(home.length)}`;
-		}
+		let pwd = shortenPath(process.cwd());
 
 		// Add git branch if available
 		const branch = this.getCurrentBranch();

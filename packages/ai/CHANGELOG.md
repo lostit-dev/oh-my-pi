@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added `betas` option in `AnthropicOptions` for passing custom Anthropic beta feature flags
 - OpenCode Zen provider support with 26 models (Claude, GPT, Gemini, Grok, Kimi, GLM, Qwen, etc.). Set `OPENCODE_API_KEY` env var to use.
 - `thinkingBudgets` option in `SimpleStreamOptions` for customizing token budgets per thinking level on token-based providers
 - `sessionId` option in `StreamOptions` for providers that support session-based caching. OpenAI Codex provider uses this to set `prompt_cache_key` and routing headers.
@@ -15,11 +17,17 @@
 
 ### Changed
 
+- Changed Anthropic OAuth tool naming to use `proxy_` prefix instead of mapping to Claude Code tool names, avoiding potential name collisions
+- Changed Anthropic provider to include Claude Code headers for all requests, not just OAuth tokens
 - Anthropic provider now maps tool names to Claude Code's exact tool names (Read, Write, Edit, Bash, Grep, Glob) instead of using prefixed names
 - OpenAI Completions provider now disables strict mode on tools to allow optional parameters without null unions
 
 ### Fixed
 
+- Fixed Anthropic OAuth code parsing to accept full redirect URLs in addition to raw authorization codes
+- Fixed Anthropic token refresh to preserve existing refresh token when server doesn't return a new one
+- Fixed thinking mode being enabled when tool_choice forces a specific tool, which is unsupported
+- Fixed max_tokens being too low when thinking budget is set, now auto-adjusts to model's maxTokens
 - Google Cloud Code Assist OAuth for paid subscriptions: properly handles long-running operations for project provisioning, supports `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT_ID` env vars for paid tiers
 - `os.homedir()` calls at module load time; now resolved lazily when needed
 - OpenAI Responses tool strict flag to use a boolean for LM Studio compatibility

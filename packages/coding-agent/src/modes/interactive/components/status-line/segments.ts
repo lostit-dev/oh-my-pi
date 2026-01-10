@@ -1,4 +1,5 @@
-import { homedir, hostname as osHostname } from "node:os";
+import { hostname as osHostname } from "node:os";
+import { shortenPath } from "../../../../core/tools/render-utils";
 import { theme } from "../../theme/theme";
 import type { RenderedSegment, SegmentContext, StatusLineSegment, StatusLineSegmentId } from "./types";
 
@@ -76,10 +77,9 @@ const pathSegment: StatusLineSegment = {
 		const opts = ctx.options.path ?? {};
 
 		let pwd = process.cwd();
-		const home = homedir();
 
-		if (opts.abbreviate !== false && home && pwd.startsWith(home)) {
-			pwd = `~${pwd.slice(home.length)}`;
+		if (opts.abbreviate !== false) {
+			pwd = shortenPath(pwd);
 		}
 		if (opts.stripWorkPrefix !== false && pwd.startsWith("/work/")) {
 			pwd = pwd.slice(6);

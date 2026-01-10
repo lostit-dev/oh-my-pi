@@ -1,4 +1,3 @@
-import { homedir } from "node:os";
 import {
 	type Component,
 	Container,
@@ -19,6 +18,7 @@ import {
 	truncateToWidth,
 } from "@oh-my-pi/pi-tui";
 import type { SessionTreeNode } from "../../../core/session-manager";
+import { shortenPath } from "../../../core/tools/render-utils";
 import { theme } from "../theme/theme";
 import { DynamicBorder } from "./dynamic-border";
 
@@ -608,12 +608,6 @@ class TreeList implements Component {
 	}
 
 	private formatToolCall(name: string, args: Record<string, unknown>): string {
-		const shortenPath = (p: string): string => {
-			const home = homedir();
-			if (home && p.startsWith(home)) return `~${p.slice(home.length)}`;
-			return p;
-		};
-
 		switch (name) {
 			case "read": {
 				const path = shortenPath(String(args.path || args.file_path || ""));

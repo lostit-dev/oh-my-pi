@@ -12,6 +12,30 @@ const TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 const REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback";
 const SCOPES = "org:create_api_key user:profile user:inference";
 
+function parseAuthCode(input: string): { code: string; state?: string } {
+	const trimmed = input.trim();
+	if (!trimmed) return { code: "" };
+
+	try {
+		const url = new URL(trimmed);
+		const code = url.searchParams.get("code") ?? "";
+		const state = url.searchParams.get("state") ?? undefined;
+		if (code) return { code, state };
+	} catch {
+		// Ignore invalid URL parsing and fall back to manual parsing.
+	}
+
+	if (trimmed.includes("code=")) {
+		const params = new URLSearchParams(trimmed.replace(/^[?#]/, ""));
+		const code = params.get("code") ?? "";
+		const state = params.get("state") ?? undefined;
+		if (code) return { code, state };
+	}
+
+	const [code, state] = trimmed.split("#");
+	return { code, state };
+}
+
 /**
  * Login with Anthropic OAuth (device code flow)
  *
@@ -43,9 +67,7 @@ export async function loginAnthropic(
 
 	// Wait for user to paste authorization code (format: code#state)
 	const authCode = await onPromptCode();
-	const splits = authCode.split("#");
-	const code = splits[0];
-	const state = splits[1];
+	const { code, state } = parseAuthCode(authCode);
 
 	// Exchange code for tokens
 	const tokenResponse = await fetch(TOKEN_URL, {
@@ -56,8 +78,8 @@ export async function loginAnthropic(
 		body: JSON.stringify({
 			grant_type: "authorization_code",
 			client_id: CLIENT_ID,
-			code: code,
-			state: state,
+			code,
+			...(state ? { state } : {}),
 			redirect_uri: REDIRECT_URI,
 			code_verifier: verifier,
 		}),
@@ -111,7 +133,7 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
 	};
 
 	return {
-		refresh: data.refresh_token,
+		refresh: data.refresh_token || refreshToken,
 		access: data.access_token,
 		expires: Date.now() + data.expires_in * 1000 - 5 * 60 * 1000,
 	};

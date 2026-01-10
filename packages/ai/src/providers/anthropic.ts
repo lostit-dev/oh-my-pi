@@ -29,26 +29,31 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode";
 
 import { transformMessages } from "./transorm-messages";
 
-// Stealth mode: Mimic Claude Code's tool naming exactly
-const claudeCodeVersion = "2.1.2";
+// Stealth mode: Mimic Claude Code headers while avoiding tool name collisions.
+const claudeCodeVersion = "1.0.83";
+const claudeToolPrefix = "proxy_";
+const claudeCodeSystemInstruction = "You are Claude Code, Anthropic's official CLI for Claude.";
+const claudeCodeHeaders = {
+	"anthropic-version": "2023-06-01",
+	"x-stainless-helper-method": "stream",
+	"x-stainless-retry-count": "0",
+	"x-stainless-runtime-version": "v24.3.0",
+	"x-stainless-package-version": "0.55.1",
+	"x-stainless-runtime": "node",
+	"x-stainless-lang": "js",
+	"x-stainless-arch": "arm64",
+	"x-stainless-os": "MacOS",
+	"x-stainless-timeout": "60",
+} as const;
 
-// Map pi! tool names to Claude Code's exact tool names
-const claudeCodeToolNames: Record<string, string> = {
-	read: "Read",
-	write: "Write",
-	edit: "Edit",
-	bash: "Bash",
-	grep: "Grep",
-	find: "Glob",
-	ls: "Glob",
+const applyClaudeToolPrefix = (name: string) => {
+	if (!claudeToolPrefix || name.startsWith(claudeToolPrefix)) return name;
+	return `${claudeToolPrefix}${name}`;
 };
 
-const toClaudeCodeName = (name: string) => claudeCodeToolNames[name] || name;
-const fromClaudeCodeName = (name: string) => {
-	for (const [piName, ccName] of Object.entries(claudeCodeToolNames)) {
-		if (ccName === name) return piName;
-	}
-	return name;
+const stripClaudeToolPrefix = (name: string) => {
+	if (!claudeToolPrefix || !name.startsWith(claudeToolPrefix)) return name;
+	return name.slice(claudeToolPrefix.length);
 };
 
 /**
@@ -108,6 +113,7 @@ export interface AnthropicOptions extends StreamOptions {
 	thinkingBudgetTokens?: number;
 	interleavedThinking?: boolean;
 	toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
+	betas?: string[] | string;
 }
 
 export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
@@ -138,7 +144,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 
 		try {
 			const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
-			const { client, isOAuthToken } = createClient(model, apiKey, options?.interleavedThinking ?? true);
+			const extraBetas = normalizeExtraBetas(options?.betas);
+			const { client, isOAuthToken } = createClient(model, apiKey, options?.interleavedThinking ?? true, extraBetas);
 			const params = buildParams(model, context, isOAuthToken, options);
 			const anthropicStream = client.messages.stream({ ...params, stream: true }, { signal: options?.signal });
 			stream.push({ type: "start", partial: output });
@@ -180,7 +187,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						const block: Block = {
 							type: "toolCall",
 							id: event.content_block.id,
-							name: isOAuthToken ? fromClaudeCodeName(event.content_block.name) : event.content_block.name,
+							name: isOAuthToken ? stripClaudeToolPrefix(event.content_block.name) : event.content_block.name,
 							arguments: event.content_block.input as Record<string, any>,
 							partialJson: "",
 							index: event.index,
@@ -305,6 +312,12 @@ function isOAuthToken(apiKey: string): boolean {
 	return apiKey.includes("sk-ant-oat");
 }
 
+function normalizeExtraBetas(betas?: string[] | string): string[] {
+	if (!betas) return [];
+	const raw = Array.isArray(betas) ? betas : betas.split(",");
+	return raw.map((beta) => beta.trim()).filter((beta) => beta.length > 0);
+}
+
 // Build deduplicated beta header string
 function buildBetaHeader(baseBetas: string[], extraBetas: string[]): string {
 	const seen = new Set<string>();
@@ -323,6 +336,7 @@ function createClient(
 	model: Model<"anthropic-messages">,
 	apiKey: string,
 	interleavedThinking: boolean,
+	extraBetas: string[],
 ): { client: Anthropic; isOAuthToken: boolean } {
 	const oauthToken = isOAuthToken(apiKey);
 
@@ -337,18 +351,23 @@ function createClient(
 		: ["fine-grained-tool-streaming-2025-05-14"];
 
 	// Add interleaved thinking if requested (and not already in base)
-	const extraBetas: string[] = [];
+	const mergedBetas: string[] = [];
 	if (interleavedThinking && !oauthToken) {
-		extraBetas.push("interleaved-thinking-2025-05-14");
+		mergedBetas.push("interleaved-thinking-2025-05-14");
 	}
 
 	// Include any betas from model headers
 	const modelBeta = model.headers?.["anthropic-beta"];
 	if (modelBeta) {
-		extraBetas.push(...modelBeta.split(","));
+		mergedBetas.push(...normalizeExtraBetas(modelBeta));
 	}
 
-	const betaHeader = buildBetaHeader(baseBetas, extraBetas);
+	// Include any betas passed via options
+	if (extraBetas.length > 0) {
+		mergedBetas.push(...extraBetas);
+	}
+
+	const betaHeader = buildBetaHeader(baseBetas, mergedBetas);
 
 	if (oauthToken) {
 		// Stealth mode: Mimic Claude Code's headers exactly
@@ -358,6 +377,7 @@ function createClient(
 			"anthropic-beta": betaHeader,
 			"user-agent": `claude-cli/${claudeCodeVersion} (external, cli)`,
 			"x-app": "cli",
+			...claudeCodeHeaders,
 			...(model.headers || {}),
 		};
 		// Don't duplicate anthropic-beta from model.headers
@@ -379,6 +399,9 @@ function createClient(
 		accept: "application/json",
 		"anthropic-dangerous-direct-browser-access": "true",
 		"anthropic-beta": betaHeader,
+		"user-agent": `claude-cli/${claudeCodeVersion} (external, cli)`,
+		"x-app": "cli",
+		...claudeCodeHeaders,
 		...(model.headers || {}),
 	};
 	// Ensure our beta header takes precedence
@@ -394,6 +417,55 @@ function createClient(
 	return { client, isOAuthToken: false };
 }
 
+type SystemBlock = { type: "text"; text: string; cache_control: { type: "ephemeral" } };
+
+function buildSystemBlocks(systemPrompt: string | undefined, includeClaudeCode: boolean): SystemBlock[] | undefined {
+	const blocks: SystemBlock[] = [];
+	const sanitizedPrompt = systemPrompt ? sanitizeSurrogates(systemPrompt) : "";
+	const hasClaudeCodeInstruction = sanitizedPrompt.includes(claudeCodeSystemInstruction);
+
+	if (includeClaudeCode && !hasClaudeCodeInstruction) {
+		blocks.push({
+			type: "text",
+			text: claudeCodeSystemInstruction,
+			cache_control: { type: "ephemeral" },
+		});
+	}
+
+	if (systemPrompt) {
+		blocks.push({
+			type: "text",
+			text: sanitizedPrompt,
+			cache_control: { type: "ephemeral" },
+		});
+	}
+
+	return blocks.length > 0 ? blocks : undefined;
+}
+
+function disableThinkingIfToolChoiceForced(params: MessageCreateParamsStreaming): void {
+	const toolChoice = params.tool_choice;
+	if (!toolChoice) return;
+	if (toolChoice.type === "any" || toolChoice.type === "tool") {
+		delete params.thinking;
+	}
+}
+
+function ensureMaxTokensForThinking(params: MessageCreateParamsStreaming, model: Model<"anthropic-messages">): void {
+	const thinking = params.thinking;
+	if (!thinking || thinking.type !== "enabled") return;
+
+	const budgetTokens = thinking.budget_tokens ?? 0;
+	if (budgetTokens <= 0) return;
+
+	const maxTokens = params.max_tokens ?? 0;
+	const fallbackBuffer = 4000;
+	const requiredMaxTokens = model.maxTokens > 0 ? model.maxTokens : budgetTokens + fallbackBuffer;
+	if (maxTokens < requiredMaxTokens) {
+		params.max_tokens = requiredMaxTokens;
+	}
+}
+
 function buildParams(
 	model: Model<"anthropic-messages">,
 	context: Context,
@@ -407,37 +479,10 @@ function buildParams(
 		stream: true,
 	};
 
-	// For OAuth tokens, we MUST include Claude Code identity
-	if (isOAuthToken) {
-		params.system = [
-			{
-				type: "text",
-				text: "You are Claude Code, Anthropic's official CLI for Claude.",
-				cache_control: {
-					type: "ephemeral",
-				},
-			},
-		];
-		if (context.systemPrompt) {
-			params.system.push({
-				type: "text",
-				text: sanitizeSurrogates(context.systemPrompt),
-				cache_control: {
-					type: "ephemeral",
-				},
-			});
-		}
-	} else if (context.systemPrompt) {
-		// Add cache control to system prompt for non-OAuth tokens
-		params.system = [
-			{
-				type: "text",
-				text: sanitizeSurrogates(context.systemPrompt),
-				cache_control: {
-					type: "ephemeral",
-				},
-			},
-		];
+	const includeClaudeCodeSystem = isOAuthToken && !model.id.startsWith("claude-3-5-haiku");
+	const systemBlocks = buildSystemBlocks(context.systemPrompt, includeClaudeCodeSystem);
+	if (systemBlocks) {
+		params.system = systemBlocks;
 	}
 
 	if (options?.temperature !== undefined) {
@@ -460,11 +505,14 @@ function buildParams(
 			params.tool_choice = { type: options.toolChoice };
 		} else if (isOAuthToken && options.toolChoice.name) {
 			// Prefix tool name in tool_choice for OAuth mode
-			params.tool_choice = { ...options.toolChoice, name: toClaudeCodeName(options.toolChoice.name) };
+			params.tool_choice = { ...options.toolChoice, name: applyClaudeToolPrefix(options.toolChoice.name) };
 		} else {
 			params.tool_choice = options.toolChoice;
 		}
 	}
+
+	disableThinkingIfToolChoiceForced(params);
+	ensureMaxTokensForThinking(params, model);
 
 	return params;
 }
@@ -558,7 +606,7 @@ function convertMessages(
 					blocks.push({
 						type: "tool_use",
 						id: sanitizeToolCallId(block.id),
-						name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
+						name: isOAuthToken ? applyClaudeToolPrefix(block.name) : block.name,
 						input: block.arguments,
 					});
 				}
@@ -631,7 +679,7 @@ function convertTools(tools: Tool[], isOAuthToken: boolean): Anthropic.Messages.
 		const jsonSchema = tool.parameters as any; // TypeBox already generates JSON Schema
 
 		return {
-			name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
+			name: isOAuthToken ? applyClaudeToolPrefix(tool.name) : tool.name,
 			description: tool.description,
 			input_schema: {
 				type: "object" as const,
