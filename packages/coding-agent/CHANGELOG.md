@@ -1,6 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added `workdir` parameter to bash tool to execute commands in a specific directory without requiring `cd` commands
+
+### Changed
+
+- Updated bash tool rendering to display working directory context when `workdir` parameter is used
+
 ### Fixed
 
 - Fixed completion notification to only send when interactive mode is in foreground

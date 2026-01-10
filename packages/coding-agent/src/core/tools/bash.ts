@@ -14,6 +14,9 @@ import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateTail } fr
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
+	workdir: Type.Optional(
+		Type.String({ description: "Working directory for the command (default: current directory)" }),
+	),
 });
 
 export interface BashToolDetails {
@@ -29,7 +32,7 @@ export function createBashTool(session: ToolSession): AgentTool<typeof bashSchem
 		parameters: bashSchema,
 		execute: async (
 			_toolCallId: string,
-			{ command, timeout }: { command: string; timeout?: number },
+			{ command, timeout, workdir }: { command: string; timeout?: number; workdir?: string },
 			signal?: AbortSignal,
 			onUpdate?,
 			ctx?: AgentToolContext,
@@ -53,7 +56,7 @@ export function createBashTool(session: ToolSession): AgentTool<typeof bashSchem
 			let currentOutput = "";
 
 			const result = await executeBash(command, {
-				cwd: session.cwd,
+				cwd: workdir ?? session.cwd,
 				timeout: timeout ? timeout * 1000 : undefined, // Convert to milliseconds
 				signal,
 				onChunk: (chunk) => {
@@ -117,6 +120,7 @@ export function createBashTool(session: ToolSession): AgentTool<typeof bashSchem
 interface BashRenderArgs {
 	command?: string;
 	timeout?: number;
+	workdir?: string;
 }
 
 interface BashRenderContext {
@@ -132,7 +136,11 @@ export const bashToolRenderer = {
 	renderCall(args: BashRenderArgs, uiTheme: Theme): Component {
 		const ui = createToolUIKit(uiTheme);
 		const command = args.command || uiTheme.format.ellipsis;
-		const text = ui.title(`$ ${command}`);
+		const prompt = uiTheme.fg("accent", "$");
+		const cmdText = args.workdir
+			? `${prompt} ${uiTheme.fg("dim", `cd ${args.workdir} &&`)} ${command}`
+			: `${prompt} ${command}`;
+		const text = ui.title(cmdText);
 		return new Text(text, 0, 0);
 	},
 
