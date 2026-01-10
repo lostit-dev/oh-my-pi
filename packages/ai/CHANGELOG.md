@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [4.0.0] - 2026-01-10
 ### Added
 
 - Added `betas` option in `AnthropicOptions` for passing custom Anthropic beta feature flags

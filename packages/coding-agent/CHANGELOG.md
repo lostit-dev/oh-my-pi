@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-01-10
+
 ### Added
 
 - Exported `InteractiveModeOptions` type for programmatic SDK usage
