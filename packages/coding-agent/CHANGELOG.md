@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [4.1.0] - 2026-01-10
 ### Added
 
 - Added persistent prompt history with SQLite-backed storage and Ctrl+R search

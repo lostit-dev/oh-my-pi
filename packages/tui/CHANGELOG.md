@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [4.1.0] - 2026-01-10
 ### Added
 
 - Added persistent prompt history storage support via `setHistoryStorage()` method, allowing history to be saved and restored across sessions
