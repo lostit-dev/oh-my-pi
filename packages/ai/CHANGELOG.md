@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Enabled type coercion in JSON schema validation to automatically convert compatible types
 
 ## [3.36.0] - 2026-01-10
 

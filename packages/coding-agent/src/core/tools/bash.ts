@@ -2,6 +2,7 @@ import type { AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
+import { relative, resolve, sep } from "node:path";
 import type { Theme } from "../../modes/interactive/theme/theme";
 import bashDescription from "../../prompts/tools/bash.md" with { type: "text" };
 import { executeBash } from "../bash-executor";
@@ -137,8 +138,25 @@ export const bashToolRenderer = {
 		const ui = createToolUIKit(uiTheme);
 		const command = args.command || uiTheme.format.ellipsis;
 		const prompt = uiTheme.fg("accent", "$");
-		const cmdText = args.workdir
-			? `${prompt} ${uiTheme.fg("dim", `cd ${args.workdir} &&`)} ${command}`
+		const cwd = process.cwd();
+		let displayWorkdir = args.workdir;
+
+		if (displayWorkdir) {
+			const resolvedCwd = resolve(cwd);
+			const resolvedWorkdir = resolve(displayWorkdir);
+			if (resolvedWorkdir === resolvedCwd) {
+				displayWorkdir = undefined;
+			} else {
+				const relativePath = relative(resolvedCwd, resolvedWorkdir);
+				const isWithinCwd = relativePath && !relativePath.startsWith("..") && !relativePath.startsWith(`..${sep}`);
+				if (isWithinCwd) {
+					displayWorkdir = relativePath;
+				}
+			}
+		}
+
+		const cmdText = displayWorkdir
+			? `${prompt} ${uiTheme.fg("dim", `cd ${displayWorkdir} &&`)} ${command}`
 			: `${prompt} ${command}`;
 		const text = ui.title(cmdText);
 		return new Text(text, 0, 0);

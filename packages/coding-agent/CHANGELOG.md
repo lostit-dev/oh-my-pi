@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Improved bash command display to show relative paths for working directories within the current directory, and hide redundant `cd` prefix when working directory matches current directory
 
 ## [3.36.0] - 2026-01-10
 ### Added
