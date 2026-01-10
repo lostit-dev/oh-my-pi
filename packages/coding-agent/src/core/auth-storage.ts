@@ -46,6 +46,45 @@ export type AuthCredentialEntry = AuthCredential | AuthCredential[];
 
 export type AuthStorageData = Record<string, AuthCredentialEntry>;
 
+/** Rate limit window from Codex usage API (primary or secondary quota). */
+type CodexUsageWindow = {
+	usedPercent?: number;
+	limitWindowSeconds?: number;
+	resetAt?: number; // Unix timestamp (seconds)
+};
+
+/** Parsed usage data from Codex /wham/usage endpoint. */
+type CodexUsage = {
+	allowed?: boolean;
+	limitReached?: boolean;
+	primary?: CodexUsageWindow;
+	secondary?: CodexUsageWindow;
+};
+
+/** Cached usage entry with TTL for avoiding redundant API calls. */
+type CodexUsageCacheEntry = {
+	fetchedAt: number;
+	expiresAt: number;
+	usage?: CodexUsage;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function toNumber(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isFinite(value)) return value;
+	if (typeof value === "string" && value.trim()) {
+		const parsed = Number(value);
+		return Number.isFinite(parsed) ? parsed : undefined;
+	}
+	return undefined;
+}
+
+function toBoolean(value: unknown): boolean | undefined {
+	return typeof value === "boolean" ? value : undefined;
+}
+
 /**
  * Credential storage backed by a JSON file.
  * Reads from multiple fallback paths, writes to primary path.
@@ -55,13 +94,19 @@ export class AuthStorage {
 	private static readonly lockRetryDelayMs = 50; // Polling interval when waiting for lock
 	private static readonly lockTimeoutMs = 5000; // Max wait time before failing
 	private static readonly lockStaleMs = 30000; // Age threshold for auto-removing orphaned locks
+	private static readonly codexUsageCacheTtlMs = 60_000; // Cache usage data for 1 minute
+	private static readonly defaultBackoffMs = 60_000; // Default backoff when no reset time available
 
 	private data: AuthStorageData = {};
 	private runtimeOverrides: Map<string, string> = new Map();
-	/** Tracks next credential index per provider:type key for round-robin distribution */
+	/** Tracks next credential index per provider:type key for round-robin distribution (non-session use). */
 	private providerRoundRobinIndex: Map<string, number> = new Map();
-	/** Maps provider:type -> sessionId -> credentialIndex for session-sticky credential assignment */
-	private sessionCredentialIndexes: Map<string, Map<string, number>> = new Map();
+	/** Tracks the last used credential per provider for a session (used for rate-limit switching). */
+	private sessionLastCredential: Map<string, Map<string, { type: AuthCredential["type"]; index: number }>> = new Map();
+	/** Maps provider:type -> credentialIndex -> blockedUntilMs for temporary backoff. */
+	private credentialBackoff: Map<string, Map<number, number>> = new Map();
+	/** Cached usage info for providers that expose usage endpoints. */
+	private codexUsageCache: Map<string, CodexUsageCacheEntry> = new Map();
 	private fallbackResolver?: (provider: string) => string | undefined;
 
 	/**
@@ -249,32 +294,85 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Selects credential index with session affinity.
-	 * Sessions reuse their assigned credential; new sessions get next round-robin index.
-	 * This ensures a session always uses the same credential for consistency.
+	 * FNV-1a hash for deterministic session-to-credential mapping.
+	 * Ensures the same session always starts with the same credential.
 	 */
-	private selectCredentialIndex(providerKey: string, sessionId: string | undefined, total: number): number {
+	private getHashedIndex(sessionId: string, total: number): number {
 		if (total <= 1) return 0;
-		if (!sessionId) return 0;
-
-		const sessionMap = this.sessionCredentialIndexes.get(providerKey);
-		const existing = sessionMap?.get(sessionId);
-		if (existing !== undefined && existing < total) {
-			return existing;
+		let hash = 2166136261; // FNV offset basis
+		for (let i = 0; i < sessionId.length; i++) {
+			hash ^= sessionId.charCodeAt(i);
+			hash = Math.imul(hash, 16777619); // FNV prime
 		}
+		return (hash >>> 0) % total;
+	}
 
-		// New session: assign next round-robin credential and cache the assignment
-		const next = this.getNextRoundRobinIndex(providerKey, total);
-		const updatedSessionMap = sessionMap ?? new Map<string, number>();
-		updatedSessionMap.set(sessionId, next);
-		this.sessionCredentialIndexes.set(providerKey, updatedSessionMap);
-		return next;
+	/**
+	 * Returns credential indices in priority order for selection.
+	 * With sessionId: starts from hashed index (consistent per session).
+	 * Without sessionId: starts from round-robin index (load balancing).
+	 * Order wraps around so all credentials are tried if earlier ones are blocked.
+	 */
+	private getCredentialOrder(providerKey: string, sessionId: string | undefined, total: number): number[] {
+		if (total <= 1) return [0];
+		const start = sessionId ? this.getHashedIndex(sessionId, total) : this.getNextRoundRobinIndex(providerKey, total);
+		const order: number[] = [];
+		for (let i = 0; i < total; i++) {
+			order.push((start + i) % total);
+		}
+		return order;
+	}
+
+	/** Checks if a credential is temporarily blocked due to usage limits. */
+	private isCredentialBlocked(providerKey: string, credentialIndex: number): boolean {
+		const backoffMap = this.credentialBackoff.get(providerKey);
+		if (!backoffMap) return false;
+		const blockedUntil = backoffMap.get(credentialIndex);
+		if (!blockedUntil) return false;
+		if (blockedUntil <= Date.now()) {
+			backoffMap.delete(credentialIndex);
+			if (backoffMap.size === 0) {
+				this.credentialBackoff.delete(providerKey);
+			}
+			return false;
+		}
+		return true;
+	}
+
+	/** Marks a credential as blocked until the specified time. */
+	private markCredentialBlocked(providerKey: string, credentialIndex: number, blockedUntilMs: number): void {
+		const backoffMap = this.credentialBackoff.get(providerKey) ?? new Map<number, number>();
+		const existing = backoffMap.get(credentialIndex) ?? 0;
+		backoffMap.set(credentialIndex, Math.max(existing, blockedUntilMs));
+		this.credentialBackoff.set(providerKey, backoffMap);
+	}
+
+	/** Records which credential was used for a session (for rate-limit switching). */
+	private recordSessionCredential(
+		provider: string,
+		sessionId: string | undefined,
+		type: AuthCredential["type"],
+		index: number,
+	): void {
+		if (!sessionId) return;
+		const sessionMap = this.sessionLastCredential.get(provider) ?? new Map();
+		sessionMap.set(sessionId, { type, index });
+		this.sessionLastCredential.set(provider, sessionMap);
+	}
+
+	/** Retrieves the last credential used by a session. */
+	private getSessionCredential(
+		provider: string,
+		sessionId: string | undefined,
+	): { type: AuthCredential["type"]; index: number } | undefined {
+		if (!sessionId) return undefined;
+		return this.sessionLastCredential.get(provider)?.get(sessionId);
 	}
 
 	/**
 	 * Selects a credential of the specified type for a provider.
 	 * Returns both the credential and its index in the original array (for updates/removal).
-	 * Uses session-sticky selection when multiple credentials exist.
+	 * Uses deterministic hashing for session stickiness and skips blocked credentials when possible.
 	 */
 	private selectCredentialByType<T extends AuthCredential["type"]>(
 		provider: string,
@@ -292,8 +390,17 @@ export class AuthStorage {
 		if (credentials.length === 1) return credentials[0];
 
 		const providerKey = this.getProviderTypeKey(provider, type);
-		const selectedIndex = this.selectCredentialIndex(providerKey, sessionId, credentials.length);
-		return credentials[selectedIndex];
+		const order = this.getCredentialOrder(providerKey, sessionId, credentials.length);
+		const fallback = credentials[order[0]];
+
+		for (const idx of order) {
+			const candidate = credentials[idx];
+			if (!this.isCredentialBlocked(providerKey, candidate.index)) {
+				return candidate;
+			}
+		}
+
+		return fallback;
 	}
 
 	/**
@@ -306,9 +413,10 @@ export class AuthStorage {
 				this.providerRoundRobinIndex.delete(key);
 			}
 		}
-		for (const key of this.sessionCredentialIndexes.keys()) {
+		this.sessionLastCredential.delete(provider);
+		for (const key of this.credentialBackoff.keys()) {
 			if (key.startsWith(`${provider}:`)) {
-				this.sessionCredentialIndexes.delete(key);
+				this.credentialBackoff.delete(key);
 			}
 		}
 	}
@@ -495,6 +603,310 @@ export class AuthStorage {
 		await this.remove(provider);
 	}
 
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Codex Usage API Integration
+	// Queries ChatGPT/Codex usage endpoints to detect rate limits before they occur.
+	// ─────────────────────────────────────────────────────────────────────────────
+
+	/** Normalizes Codex base URL to include /backend-api path. */
+	private normalizeCodexBaseUrl(baseUrl?: string): string {
+		const fallback = "https://chatgpt.com/backend-api";
+		const trimmed = baseUrl?.trim() ? baseUrl.trim() : fallback;
+		const base = trimmed.replace(/\/+$/, "");
+		const lower = base.toLowerCase();
+		if (
+			(lower.startsWith("https://chatgpt.com") || lower.startsWith("https://chat.openai.com")) &&
+			!lower.includes("/backend-api")
+		) {
+			return `${base}/backend-api`;
+		}
+		return base;
+	}
+
+	private getCodexUsagePath(baseUrl: string): string {
+		return baseUrl.includes("/backend-api") ? "wham/usage" : "api/codex/usage";
+	}
+
+	private buildCodexUsageUrl(baseUrl: string, path: string): string {
+		const normalized = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+		return `${normalized}${path.replace(/^\/+/, "")}`;
+	}
+
+	private getCodexUsageCacheKey(accountId: string, baseUrl: string): string {
+		return `${baseUrl}|${accountId}`;
+	}
+
+	private extractCodexUsageWindow(window: unknown): CodexUsageWindow | undefined {
+		if (!isRecord(window)) return undefined;
+		const usedPercent = toNumber(window.used_percent);
+		const limitWindowSeconds = toNumber(window.limit_window_seconds);
+		const resetAt = toNumber(window.reset_at);
+		if (usedPercent === undefined && limitWindowSeconds === undefined && resetAt === undefined) return undefined;
+		return { usedPercent, limitWindowSeconds, resetAt };
+	}
+
+	private extractCodexUsage(payload: unknown): CodexUsage | undefined {
+		if (!isRecord(payload)) return undefined;
+		const rateLimit = isRecord(payload.rate_limit) ? payload.rate_limit : undefined;
+		if (!rateLimit) return undefined;
+		const primary = this.extractCodexUsageWindow(rateLimit.primary_window);
+		const secondary = this.extractCodexUsageWindow(rateLimit.secondary_window);
+		const usage: CodexUsage = {
+			allowed: toBoolean(rateLimit.allowed),
+			limitReached: toBoolean(rateLimit.limit_reached),
+			primary,
+			secondary,
+		};
+		if (!primary && !secondary && usage.allowed === undefined && usage.limitReached === undefined) return undefined;
+		return usage;
+	}
+
+	/** Returns true if usage indicates rate limit has been reached. */
+	private isCodexUsageLimitReached(usage: CodexUsage): boolean {
+		if (usage.allowed === false || usage.limitReached === true) return true;
+		if (usage.primary?.usedPercent !== undefined && usage.primary.usedPercent >= 100) return true;
+		if (usage.secondary?.usedPercent !== undefined && usage.secondary.usedPercent >= 100) return true;
+		return false;
+	}
+
+	/** Extracts the earliest reset timestamp from usage windows (in ms). */
+	private getCodexResetAtMs(usage: CodexUsage): number | undefined {
+		const now = Date.now();
+		const candidates: number[] = [];
+		const addCandidate = (value: number | undefined) => {
+			if (!value) return;
+			const ms = value > 1_000_000_000_000 ? value : value * 1000;
+			if (Number.isFinite(ms) && ms > now) {
+				candidates.push(ms);
+			}
+		};
+		const useAll = usage.limitReached === true || usage.allowed === false;
+		if (useAll) {
+			addCandidate(usage.primary?.resetAt);
+			addCandidate(usage.secondary?.resetAt);
+		} else {
+			if (usage.primary?.usedPercent !== undefined && usage.primary.usedPercent >= 100) {
+				addCandidate(usage.primary.resetAt);
+			}
+			if (usage.secondary?.usedPercent !== undefined && usage.secondary.usedPercent >= 100) {
+				addCandidate(usage.secondary.resetAt);
+			}
+		}
+		if (candidates.length === 0) return undefined;
+		return Math.min(...candidates);
+	}
+
+	private getCodexUsageExpiryMs(usage: CodexUsage, nowMs: number): number {
+		const resetAtMs = this.getCodexResetAtMs(usage);
+		if (this.isCodexUsageLimitReached(usage)) {
+			if (resetAtMs) return resetAtMs;
+			return nowMs + AuthStorage.defaultBackoffMs;
+		}
+		const defaultExpiry = nowMs + AuthStorage.codexUsageCacheTtlMs;
+		if (!resetAtMs) return defaultExpiry;
+		return Math.min(defaultExpiry, resetAtMs);
+	}
+
+	/** Fetches usage data from Codex API. */
+	private async fetchCodexUsage(credential: OAuthCredential, baseUrl?: string): Promise<CodexUsage | undefined> {
+		const accountId = credential.accountId;
+		if (!accountId) return undefined;
+
+		const normalizedBase = this.normalizeCodexBaseUrl(baseUrl);
+		const url = this.buildCodexUsageUrl(normalizedBase, this.getCodexUsagePath(normalizedBase));
+		const headers = {
+			authorization: `Bearer ${credential.access}`,
+			"chatgpt-account-id": accountId,
+			"openai-beta": "responses=experimental",
+			originator: "codex_cli_rs",
+		};
+
+		try {
+			const response = await fetch(url, { headers });
+			if (!response.ok) {
+				logger.debug("AuthStorage codex usage fetch failed", {
+					status: response.status,
+					statusText: response.statusText,
+				});
+				return undefined;
+			}
+
+			const payload = (await response.json()) as unknown;
+			return this.extractCodexUsage(payload);
+		} catch (error) {
+			logger.debug("AuthStorage codex usage fetch error", { error: String(error) });
+			return undefined;
+		}
+	}
+
+	/** Gets usage data with caching to avoid redundant API calls. */
+	private async getCodexUsage(credential: OAuthCredential, baseUrl?: string): Promise<CodexUsage | undefined> {
+		const accountId = credential.accountId;
+		if (!accountId) return undefined;
+
+		const normalizedBase = this.normalizeCodexBaseUrl(baseUrl);
+		const cacheKey = this.getCodexUsageCacheKey(accountId, normalizedBase);
+		const now = Date.now();
+		const cached = this.codexUsageCache.get(cacheKey);
+		if (cached && cached.expiresAt > now) {
+			return cached.usage;
+		}
+
+		const usage = await this.fetchCodexUsage(credential, normalizedBase);
+		if (usage) {
+			const expiresAt = this.getCodexUsageExpiryMs(usage, now);
+			this.codexUsageCache.set(cacheKey, { fetchedAt: now, expiresAt, usage });
+			return usage;
+		}
+
+		this.codexUsageCache.set(cacheKey, {
+			fetchedAt: now,
+			expiresAt: now + AuthStorage.defaultBackoffMs,
+		});
+		return undefined;
+	}
+
+	/**
+	 * Marks the current session's credential as temporarily blocked due to usage limits.
+	 * Queries the Codex usage API to determine accurate reset time.
+	 * Returns true if a credential was blocked, enabling automatic fallback to the next credential.
+	 */
+	async markUsageLimitReached(
+		provider: string,
+		sessionId: string | undefined,
+		options?: { retryAfterMs?: number; baseUrl?: string },
+	): Promise<boolean> {
+		const sessionCredential = this.getSessionCredential(provider, sessionId);
+		if (!sessionCredential) return false;
+
+		const providerKey = this.getProviderTypeKey(provider, sessionCredential.type);
+		const now = Date.now();
+		let blockedUntil = now + (options?.retryAfterMs ?? AuthStorage.defaultBackoffMs);
+
+		if (provider === "openai-codex" && sessionCredential.type === "oauth") {
+			const credential = this.getCredentialsForProvider(provider)[sessionCredential.index];
+			if (credential?.type === "oauth") {
+				const usage = await this.getCodexUsage(credential, options?.baseUrl);
+				if (usage) {
+					const resetAtMs = this.getCodexResetAtMs(usage);
+					if (resetAtMs && resetAtMs > blockedUntil) {
+						blockedUntil = resetAtMs;
+					}
+				}
+			}
+		}
+
+		this.markCredentialBlocked(providerKey, sessionCredential.index, blockedUntil);
+		return true;
+	}
+
+	/**
+	 * Resolves an OAuth API key, trying credentials in priority order.
+	 * Skips blocked credentials and checks usage limits for Codex accounts.
+	 * Falls back to earliest-unblocking credential if all are blocked.
+	 */
+	private async resolveOAuthApiKey(
+		provider: string,
+		sessionId?: string,
+		options?: { baseUrl?: string },
+	): Promise<string | undefined> {
+		const credentials = this.getCredentialsForProvider(provider)
+			.map((credential, index) => ({ credential, index }))
+			.filter((entry): entry is { credential: OAuthCredential; index: number } => entry.credential.type === "oauth");
+
+		if (credentials.length === 0) return undefined;
+
+		const providerKey = this.getProviderTypeKey(provider, "oauth");
+		const order = this.getCredentialOrder(providerKey, sessionId, credentials.length);
+		const fallback = credentials[order[0]];
+		const checkUsage = provider === "openai-codex" && credentials.length > 1;
+
+		for (const idx of order) {
+			const selection = credentials[idx];
+			const apiKey = await this.tryOAuthCredential(
+				provider,
+				selection,
+				providerKey,
+				sessionId,
+				options,
+				checkUsage,
+				false,
+			);
+			if (apiKey) return apiKey;
+		}
+
+		if (fallback && this.isCredentialBlocked(providerKey, fallback.index)) {
+			return this.tryOAuthCredential(provider, fallback, providerKey, sessionId, options, checkUsage, true);
+		}
+
+		return undefined;
+	}
+
+	/** Attempts to use a single OAuth credential, checking usage and refreshing token. */
+	private async tryOAuthCredential(
+		provider: string,
+		selection: { credential: OAuthCredential; index: number },
+		providerKey: string,
+		sessionId: string | undefined,
+		options: { baseUrl?: string } | undefined,
+		checkUsage: boolean,
+		allowBlocked: boolean,
+	): Promise<string | undefined> {
+		if (!allowBlocked && this.isCredentialBlocked(providerKey, selection.index)) {
+			return undefined;
+		}
+
+		if (checkUsage) {
+			const usage = await this.getCodexUsage(selection.credential, options?.baseUrl);
+			if (usage && this.isCodexUsageLimitReached(usage)) {
+				const resetAtMs = this.getCodexResetAtMs(usage);
+				this.markCredentialBlocked(
+					providerKey,
+					selection.index,
+					resetAtMs ?? Date.now() + AuthStorage.defaultBackoffMs,
+				);
+				return undefined;
+			}
+		}
+
+		const oauthCreds: Record<string, OAuthCredentials> = {
+			[provider]: selection.credential,
+		};
+
+		try {
+			const result = await getOAuthApiKey(provider as OAuthProvider, oauthCreds);
+			if (!result) return undefined;
+
+			const updated: OAuthCredential = { type: "oauth", ...result.newCredentials };
+			this.replaceCredentialAt(provider, selection.index, updated);
+			await this.save();
+
+			if (checkUsage) {
+				const usage = await this.getCodexUsage(updated, options?.baseUrl);
+				if (usage && this.isCodexUsageLimitReached(usage)) {
+					const resetAtMs = this.getCodexResetAtMs(usage);
+					this.markCredentialBlocked(
+						providerKey,
+						selection.index,
+						resetAtMs ?? Date.now() + AuthStorage.defaultBackoffMs,
+					);
+					return undefined;
+				}
+			}
+
+			this.recordSessionCredential(provider, sessionId, "oauth", selection.index);
+			return result.apiKey;
+		} catch {
+			this.removeCredentialAt(provider, selection.index);
+			await this.save();
+			if (this.getCredentialsForProvider(provider).some((credential) => credential.type === "oauth")) {
+				return this.getApiKey(provider, sessionId, options);
+			}
+		}
+
+		return undefined;
+	}
+
 	/**
 	 * Get API key for a provider.
 	 * Priority:
@@ -504,7 +916,7 @@ export class AuthStorage {
 	 * 4. Environment variable
 	 * 5. Fallback resolver (models.json custom providers)
 	 */
-	async getApiKey(provider: string, sessionId?: string): Promise<string | undefined> {
+	async getApiKey(provider: string, sessionId?: string, options?: { baseUrl?: string }): Promise<string | undefined> {
 		// Runtime override takes highest priority
 		const runtimeKey = this.runtimeOverrides.get(provider);
 		if (runtimeKey) {
@@ -513,29 +925,13 @@ export class AuthStorage {
 
 		const apiKeySelection = this.selectCredentialByType(provider, "api_key", sessionId);
 		if (apiKeySelection) {
+			this.recordSessionCredential(provider, sessionId, "api_key", apiKeySelection.index);
 			return apiKeySelection.credential.key;
 		}
 
-		const oauthSelection = this.selectCredentialByType(provider, "oauth", sessionId);
-		if (oauthSelection) {
-			const oauthCreds: Record<string, OAuthCredentials> = {
-				[provider]: oauthSelection.credential,
-			};
-
-			try {
-				const result = await getOAuthApiKey(provider as OAuthProvider, oauthCreds);
-				if (result) {
-					this.replaceCredentialAt(provider, oauthSelection.index, { type: "oauth", ...result.newCredentials });
-					await this.save();
-					return result.apiKey;
-				}
-			} catch {
-				this.removeCredentialAt(provider, oauthSelection.index);
-				await this.save();
-				if (this.getCredentialsForProvider(provider).some((credential) => credential.type === "oauth")) {
-					return this.getApiKey(provider, sessionId);
-				}
-			}
+		const oauthKey = await this.resolveOAuthApiKey(provider, sessionId, options);
+		if (oauthKey) {
+			return oauthKey;
 		}
 
 		// Fall back to environment variable

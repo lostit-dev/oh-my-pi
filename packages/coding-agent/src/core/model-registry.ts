@@ -391,14 +391,14 @@ export class ModelRegistry {
 	 * Get API key for a model.
 	 */
 	async getApiKey(model: Model<Api>, sessionId?: string): Promise<string | undefined> {
-		return this.authStorage.getApiKey(model.provider, sessionId);
+		return this.authStorage.getApiKey(model.provider, sessionId, { baseUrl: model.baseUrl });
 	}
 
 	/**
 	 * Get API key for a provider (e.g., "openai").
 	 */
-	async getApiKeyForProvider(provider: string, sessionId?: string): Promise<string | undefined> {
-		return this.authStorage.getApiKey(provider, sessionId);
+	async getApiKeyForProvider(provider: string, sessionId?: string, baseUrl?: string): Promise<string | undefined> {
+		return this.authStorage.getApiKey(provider, sessionId, { baseUrl });
 	}
 
 	/**

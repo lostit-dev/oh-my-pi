@@ -1981,10 +1981,14 @@ export class AgentSession {
 	}
 
 	private _isRetryableErrorMessage(errorMessage: string): boolean {
-		// Match: overloaded_error, rate limit, 429, 500, 502, 503, 504, service unavailable, connection error
-		return /overloaded|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server error|internal error|connection.?error/i.test(
+		// Match: overloaded_error, rate limit, usage limit, 429, 500, 502, 503, 504, service unavailable, connection error
+		return /overloaded|rate.?limit|usage.?limit|too many requests|429|500|502|503|504|service.?unavailable|server error|internal error|connection.?error/i.test(
 			errorMessage,
 		);
+	}
+
+	private _isUsageLimitErrorMessage(errorMessage: string): boolean {
+		return /usage.?limit|usage_limit_reached|limit_reached/i.test(errorMessage);
 	}
 
 	private _parseRetryAfterMsFromError(errorMessage: string): number | undefined {
@@ -2063,14 +2067,30 @@ export class AgentSession {
 			return false;
 		}
 
-		const delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
+		const errorMessage = message.errorMessage || "Unknown error";
+		let delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
+
+		if (this.model && this._isUsageLimitErrorMessage(errorMessage)) {
+			const retryAfterMs = this._parseRetryAfterMsFromError(errorMessage);
+			const switched = await this._modelRegistry.authStorage.markUsageLimitReached(
+				this.model.provider,
+				this.sessionId,
+				{
+					retryAfterMs,
+					baseUrl: this.model.baseUrl,
+				},
+			);
+			if (switched) {
+				delayMs = 0;
+			}
+		}
 
 		this._emit({
 			type: "auto_retry_start",
 			attempt: this._retryAttempt,
 			maxAttempts: settings.maxRetries,
 			delayMs,
-			errorMessage: message.errorMessage || "Unknown error",
+			errorMessage,
 		});
 
 		// Remove error message from agent state (keep in session for history)

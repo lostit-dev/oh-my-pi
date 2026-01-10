@@ -1,6 +1,20 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added usage limit error detection to enable automatic credential switching when Codex accounts hit rate limits
+- Added Codex usage API integration to proactively check account limits before credential selection
+- Added credential backoff tracking to temporarily skip rate-limited accounts during selection
+- Multi-credential usage-aware selection for OpenAI Codex OAuth accounts with automatic fallback when rate limits are reached
+- Consistent session-to-credential hashing (FNV-1a) for stable credential assignment across sessions
+- Codex usage API integration to detect and cache rate limit status per account
+- Automatic mid-session credential switching when usage limits are hit
+
+### Changed
+
+- Changed credential selection to use deterministic FNV-1a hashing for consistent session-to-credential mapping
+- Changed OAuth credential resolution to try credentials in priority order, skipping blocked ones
 
 ## [4.0.0] - 2026-01-10
 
