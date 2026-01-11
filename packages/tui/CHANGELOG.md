@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [4.4.4] - 2026-01-11
 ### Fixed
 
 - Fixed Ctrl+Enter sequences to insert new lines in the editor

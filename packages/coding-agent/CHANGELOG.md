@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [4.4.4] - 2026-01-11
 ### Added
 
 - Added `todo_write` tool for creating and managing structured task lists during coding sessions
