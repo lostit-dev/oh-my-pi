@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Improved fuzzy matching accuracy for edit operations when file and target have inconsistent indentation patterns
 
 ## [4.2.3] - 2026-01-11
 

@@ -49,9 +49,9 @@ function countLeadingWhitespace(line: string): number {
 		const char = line[i];
 		if (char === " " || char === "\t") {
 			count++;
-			continue;
+		} else {
+			break;
 		}
-		break;
 	}
 	return count;
 }
@@ -80,15 +80,16 @@ function computeRelativeIndentDepths(lines: string[]): number[] {
 	});
 }
 
-function normalizeLinesForMatch(lines: string[]): string[] {
-	const indentDepths = computeRelativeIndentDepths(lines);
+function normalizeLinesForMatch(lines: string[], includeDepth = true): string[] {
+	const indentDepths = includeDepth ? computeRelativeIndentDepths(lines) : null;
 	return lines.map((line, index) => {
 		const trimmed = line.trim();
+		const prefix = indentDepths ? `${indentDepths[index]}|` : "|";
 		if (trimmed.length === 0) {
-			return `${indentDepths[index]}|`;
+			return prefix;
 		}
 		const collapsed = trimmed.replace(/[ \t]+/g, " ");
-		return `${indentDepths[index]}|${collapsed}`;
+		return `${prefix}${collapsed}`;
 	});
 }
 
@@ -148,22 +149,14 @@ function computeLineOffsets(lines: string[]): number[] {
 	return offsets;
 }
 
-function findBestFuzzyMatch(
-	content: string,
-	target: string,
+function findBestFuzzyMatchCore(
+	contentLines: string[],
+	targetLines: string[],
+	offsets: number[],
 	threshold: number,
+	includeDepth: boolean,
 ): { best?: EditMatch; aboveThresholdCount: number } {
-	const contentLines = content.split("\n");
-	const targetLines = target.split("\n");
-	if (targetLines.length === 0 || target.length === 0) {
-		return { aboveThresholdCount: 0 };
-	}
-	if (targetLines.length > contentLines.length) {
-		return { aboveThresholdCount: 0 };
-	}
-
-	const targetNormalized = normalizeLinesForMatch(targetLines);
-	const offsets = computeLineOffsets(contentLines);
+	const targetNormalized = normalizeLinesForMatch(targetLines, includeDepth);
 
 	let best: EditMatch | undefined;
 	let bestScore = -1;
@@ -171,7 +164,7 @@ function findBestFuzzyMatch(
 
 	for (let start = 0; start <= contentLines.length - targetLines.length; start++) {
 		const windowLines = contentLines.slice(start, start + targetLines.length);
-		const windowNormalized = normalizeLinesForMatch(windowLines);
+		const windowNormalized = normalizeLinesForMatch(windowLines, includeDepth);
 		let score = 0;
 		for (let i = 0; i < targetLines.length; i++) {
 			score += similarityScore(targetNormalized[i], windowNormalized[i]);
@@ -194,6 +187,36 @@ function findBestFuzzyMatch(
 	}
 
 	return { best, aboveThresholdCount };
+}
+
+const FALLBACK_THRESHOLD = 0.8;
+
+function findBestFuzzyMatch(
+	content: string,
+	target: string,
+	threshold: number,
+): { best?: EditMatch; aboveThresholdCount: number } {
+	const contentLines = content.split("\n");
+	const targetLines = target.split("\n");
+	if (targetLines.length === 0 || target.length === 0) {
+		return { aboveThresholdCount: 0 };
+	}
+	if (targetLines.length > contentLines.length) {
+		return { aboveThresholdCount: 0 };
+	}
+
+	const offsets = computeLineOffsets(contentLines);
+
+	let result = findBestFuzzyMatchCore(contentLines, targetLines, offsets, threshold, true);
+
+	if (result.best && result.best.confidence < threshold && result.best.confidence >= FALLBACK_THRESHOLD) {
+		const noDepthResult = findBestFuzzyMatchCore(contentLines, targetLines, offsets, threshold, false);
+		if (noDepthResult.best && noDepthResult.best.confidence > result.best.confidence) {
+			result = noDepthResult;
+		}
+	}
+
+	return result;
 }
 
 export function findEditMatch(

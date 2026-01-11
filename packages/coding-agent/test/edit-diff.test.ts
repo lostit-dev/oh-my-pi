@@ -1,0 +1,150 @@
+import { describe, expect, test } from "bun:test";
+import { findEditMatch, DEFAULT_FUZZY_THRESHOLD } from "../src/core/tools/edit-diff";
+
+describe("findEditMatch", () => {
+	describe("exact matching", () => {
+		test("finds exact match", () => {
+			const content = "line1\nline2\nline3";
+			const target = "line2";
+			const result = findEditMatch(content, target, { allowFuzzy: false });
+			expect(result.match).toBeDefined();
+			expect(result.match!.confidence).toBe(1);
+			expect(result.match!.startLine).toBe(2);
+		});
+
+		test("reports multiple occurrences", () => {
+			const content = "foo\nbar\nfoo";
+			const target = "foo";
+			const result = findEditMatch(content, target, { allowFuzzy: false });
+			expect(result.match).toBeUndefined();
+			expect(result.occurrences).toBe(2);
+		});
+
+		test("returns empty for no match", () => {
+			const content = "line1\nline2";
+			const target = "notfound";
+			const result = findEditMatch(content, target, { allowFuzzy: false });
+			expect(result.match).toBeUndefined();
+			expect(result.occurrences).toBeUndefined();
+		});
+	});
+
+	describe("tab/space normalization", () => {
+		test("matches tabs in file with spaces in target", () => {
+			const content = "\tfoo\n\t\tbar\n\tbaz";
+			const target = "  foo\n    bar\n  baz";
+			const result = findEditMatch(content, target, { allowFuzzy: true });
+			expect(result.match).toBeDefined();
+			expect(result.match!.confidence).toBeGreaterThanOrEqual(DEFAULT_FUZZY_THRESHOLD);
+		});
+
+		test("matches spaces in file with tabs in target", () => {
+			const content = "  foo\n    bar\n  baz";
+			const target = "\tfoo\n\t\tbar\n\tbaz";
+			const result = findEditMatch(content, target, { allowFuzzy: true });
+			expect(result.match).toBeDefined();
+			expect(result.match!.confidence).toBeGreaterThanOrEqual(DEFAULT_FUZZY_THRESHOLD);
+		});
+
+		test("matches different space counts with same relative structure", () => {
+			const content = "   foo\n      bar\n   baz";
+			const target = "  foo\n    bar\n  baz";
+			const result = findEditMatch(content, target, { allowFuzzy: true });
+			expect(result.match).toBeDefined();
+			expect(result.match!.confidence).toBeGreaterThanOrEqual(DEFAULT_FUZZY_THRESHOLD);
+		});
+
+		test("matches single line with different indentation", () => {
+			const content = 'prefix\n\t\t\t"value",\nsuffix';
+			const target = '          "value",';
+			const result = findEditMatch(content, target, { allowFuzzy: true });
+			expect(result.match).toBeDefined();
+			expect(result.match!.confidence).toBeGreaterThanOrEqual(DEFAULT_FUZZY_THRESHOLD);
+		});
+	});
+
+	describe("fallback for inconsistent indentation", () => {
+		test("matches despite one line with wrong indentation in file", () => {
+			const content = "\t\t\tline1\n\t\t\tline2\n\t\tline3\n\t\t\tline4";
+			const target = "      line1\n      line2\n      line3\n      line4";
+			const result = findEditMatch(content, target, { allowFuzzy: true });
+			expect(result.match).toBeDefined();
+			expect(result.match!.confidence).toBeGreaterThanOrEqual(DEFAULT_FUZZY_THRESHOLD);
+		});
+
+		test("matches when target has consistent indent but file varies", () => {
+			const content = "  a\n    b\n   c\n    d";
+			const target = "  a\n    b\n    c\n    d";
+			const result = findEditMatch(content, target, { allowFuzzy: true });
+			expect(result.match).toBeDefined();
+		});
+	});
+
+	describe("content matching", () => {
+		test("collapses internal whitespace", () => {
+			const content = "foo   bar    baz";
+			const target = "foo bar baz";
+			const result = findEditMatch(content, target, { allowFuzzy: true });
+			expect(result.match).toBeDefined();
+			expect(result.match!.confidence).toBeGreaterThanOrEqual(DEFAULT_FUZZY_THRESHOLD);
+		});
+
+		test("matches with trailing whitespace differences", () => {
+			const content = "line1  \nline2\t";
+			const target = "line1\nline2";
+			const result = findEditMatch(content, target, { allowFuzzy: true });
+			expect(result.match).toBeDefined();
+		});
+	});
+
+	describe("threshold behavior", () => {
+		test("respects custom similarity threshold", () => {
+			const content = "function foo() {}";
+			const target = "function bar() {}";
+			const strictResult = findEditMatch(content, target, {
+				allowFuzzy: true,
+				similarityThreshold: 0.99,
+			});
+			expect(strictResult.match).toBeUndefined();
+
+			const lenientResult = findEditMatch(content, target, {
+				allowFuzzy: true,
+				similarityThreshold: 0.7,
+			});
+			expect(lenientResult.match).toBeDefined();
+		});
+
+		test("reports fuzzyMatches count when multiple above threshold", () => {
+			const content = "  item1\n  item2\n  item3";
+			const target = "  itemX";
+			const result = findEditMatch(content, target, {
+				allowFuzzy: true,
+				similarityThreshold: 0.7,
+			});
+			expect(result.fuzzyMatches).toBeGreaterThan(1);
+		});
+	});
+
+	describe("edge cases", () => {
+		test("handles empty target", () => {
+			const content = "some content";
+			const result = findEditMatch(content, "", { allowFuzzy: true });
+			expect(result).toEqual({});
+		});
+
+		test("handles empty lines in content", () => {
+			const content = "line1\n\nline3";
+			const target = "line1\n\nline3";
+			const result = findEditMatch(content, target, { allowFuzzy: false });
+			expect(result.match).toBeDefined();
+			expect(result.match!.confidence).toBe(1);
+		});
+
+		test("handles target longer than content", () => {
+			const content = "short";
+			const target = "this is much longer than the content";
+			const result = findEditMatch(content, target, { allowFuzzy: true });
+			expect(result.match).toBeUndefined();
+		});
+	});
+});
