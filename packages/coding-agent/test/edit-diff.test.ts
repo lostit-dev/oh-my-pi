@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { findEditMatch, DEFAULT_FUZZY_THRESHOLD } from "../src/core/tools/edit-diff";
+import { DEFAULT_FUZZY_THRESHOLD, findEditMatch } from "../src/core/tools/edit-diff";
 
 describe("findEditMatch", () => {
 	describe("exact matching", () => {

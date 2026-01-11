@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added model generation script to automatically fetch and update AI model definitions from models.dev and OpenRouter APIs
 
 ## [4.2.3] - 2026-01-11
 
