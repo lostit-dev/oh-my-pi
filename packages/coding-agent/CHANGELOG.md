@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [4.2.3] - 2026-01-11
+
 ### Changed
 
 - Changed default for `hidden` option in find tool from `false` to `true`, now including hidden files by default
