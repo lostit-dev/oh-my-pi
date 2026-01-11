@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [4.4.5] - 2026-01-11
+
 ### Changed
 
 - Removed `format: "date-time"` from timestamp type conversion in JTD to JSON Schema transformation

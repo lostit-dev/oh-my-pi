@@ -113,8 +113,10 @@ invalid: [unclosed array
 Body content`;
 
 		const result = parse(content);
-		expect(result.frontmatter).toEqual({}); // Fallback to empty
-		expect(result.body).toBe(content);
+		// Simple fallback parser extracts key:value pairs it can parse
+		expect(result.frontmatter).toEqual({ invalid: "[unclosed array" });
+		// Body is still extracted even with invalid YAML
+		expect(result.body).toBe("Body content");
 	});
 
 	test("handles empty frontmatter", () => {

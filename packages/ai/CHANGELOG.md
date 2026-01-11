@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [4.4.5] - 2026-01-11
 ### Changed
 
 - Exported `sanitizeSchemaForGoogle` utility function for external use
