@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [4.8.1] - 2026-01-12
+
 ### Fixed
 
 - Prevent bun from statically resolving sharp import to fix runtime errors on arm64
