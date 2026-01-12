@@ -45,7 +45,6 @@ export const taskItemSchema = Type.Object({
 	id: Type.String({
 		description: "Short task identifier for display (max 32 chars, CamelCase, e.g. 'SessionStore', 'WebFetchFix')",
 		maxLength: 32,
-		pattern: "^[A-Za-z][A-Za-z0-9]*$",
 	}),
 	task: Type.String({ description: "Task description for the agent" }),
 	description: Type.String({ description: "Short description for UI display" }),
@@ -63,8 +62,8 @@ export const taskSchema = Type.Object({
 		}),
 	),
 	output: Type.Optional(
-		Type.Any({
-			description: "JTD schema for structured subagent output (used by the complete tool)",
+		Type.Record(Type.String(), Type.Unknown(), {
+			description: "JTD schema for structured subagent output",
 		}),
 	),
 	tasks: Type.Array(taskItemSchema, {

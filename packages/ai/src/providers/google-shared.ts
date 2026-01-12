@@ -200,6 +200,18 @@ const UNSUPPORTED_SCHEMA_FIELDS = new Set([
 	"prefixItems",
 	"unevaluatedProperties",
 	"unevaluatedItems",
+	"patternProperties",
+	"additionalProperties",
+	"minItems",
+	"maxItems",
+	"minLength",
+	"maxLength",
+	"minimum",
+	"maximum",
+	"exclusiveMinimum",
+	"exclusiveMaximum",
+	"pattern",
+	"format",
 ]);
 
 export function sanitizeSchemaForGoogle(value: unknown): unknown {

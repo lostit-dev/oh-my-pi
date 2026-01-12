@@ -44,7 +44,7 @@ const calculatorSchema = Type.Object({
 			prefix: Type.String({ description: "Text to prepend to the result" }),
 			suffix: Type.String({ description: "Text to append to the result" }),
 		}),
-		{ description: "List of calculations to evaluate", minItems: 1 },
+		{ description: "List of calculations to evaluate" },
 	),
 });
 

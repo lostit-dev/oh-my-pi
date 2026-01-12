@@ -83,8 +83,7 @@ export function createCompleteTool(session: ToolSession) {
 		data: Type.Optional(dataSchema),
 		status: Type.Optional(
 			StringEnum(["success", "aborted"], {
-				default: "success",
-				description: "Use 'aborted' if the task cannot be completed",
+				description: "Use 'aborted' if the task cannot be completed, defaults to 'success'",
 			}),
 		),
 		error: Type.Optional(Type.String({ description: "Error message when status is 'aborted'" })),

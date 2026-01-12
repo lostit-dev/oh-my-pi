@@ -30,7 +30,6 @@ import { getArtifactsDir } from "./task/artifacts";
 const outputSchema = Type.Object({
 	ids: Type.Array(Type.String(), {
 		description: "Agent output IDs to read (e.g., ['reviewer_0', 'explore_1'])",
-		minItems: 1,
 	}),
 	format: Type.Optional(
 		StringEnum(["raw", "json", "stripped"], {

@@ -36,14 +36,10 @@ const OptionItem = Type.Object({
 
 const askSchema = Type.Object({
 	question: Type.String({ description: "The question to ask the user" }),
-	options: Type.Array(OptionItem, {
-		description: "Available options for the user to choose from.",
-		minItems: 1,
-	}),
+	options: Type.Array(OptionItem, { description: "Available options for the user to choose from." }),
 	multi: Type.Optional(
 		Type.Boolean({
 			description: "Allow multiple options to be selected (default: false)",
-			default: false,
 		}),
 	),
 });

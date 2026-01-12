@@ -19,8 +19,8 @@ const todoWriteSchema = Type.Object({
 	todos: Type.Array(
 		Type.Object({
 			id: Type.Optional(Type.String({ description: "Stable todo id" })),
-			content: Type.String({ minLength: 1, description: "Imperative task description (e.g., 'Run tests')" }),
-			activeForm: Type.String({ minLength: 1, description: "Present continuous form (e.g., 'Running tests')" }),
+			content: Type.String({ description: "Imperative task description (e.g., 'Run tests')" }),
+			activeForm: Type.String({ description: "Present continuous form (e.g., 'Running tests')" }),
 			status: StringEnum(["pending", "in_progress", "completed"]),
 		}),
 		{ description: "The updated todo list" },
