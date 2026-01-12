@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Modified assistant message handling to split messages around tool results for improved readability when using Cursor tools
+
+### Fixed
+
+- Fixed tool result ordering in Cursor mode by buffering results and emitting them at the correct position within assistant messages
 
 ## [4.5.0] - 2026-01-12
 

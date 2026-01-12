@@ -4,6 +4,7 @@
  */
 
 import {
+	type AssistantMessage,
 	type CursorExecHandlers,
 	type CursorToolResultHandler,
 	getModel,
@@ -106,6 +107,12 @@ export interface AgentOptions {
 	cursorOnToolResult?: CursorToolResultHandler;
 }
 
+/** Buffered Cursor tool result with text position at time of call */
+interface CursorToolResultEntry {
+	toolResult: ToolResultMessage;
+	textLengthAtCall: number;
+}
+
 export class Agent {
 	private _state: AgentState = {
 		systemPrompt: "",
@@ -137,6 +144,9 @@ export class Agent {
 	private cursorOnToolResult?: CursorToolResultHandler;
 	private runningPrompt?: Promise<void>;
 	private resolveRunningPrompt?: () => void;
+
+	/** Buffered Cursor tool results with text length at time of call (for correct ordering) */
+	private _cursorToolResultBuffer: CursorToolResultEntry[] = [];
 
 	constructor(opts: AgentOptions = {}) {
 		this._state = { ...this._state, ...opts.initialState };
@@ -418,6 +428,9 @@ export class Agent {
 		this._state.streamMessage = null;
 		this._state.error = undefined;
 
+		// Clear Cursor tool result buffer at start of each run
+		this._cursorToolResultBuffer = [];
+
 		const reasoning = this._state.thinkingLevel === "off" ? undefined : this._state.thinkingLevel;
 
 		const context: AgentContext = {
@@ -438,8 +451,12 @@ export class Agent {
 								}
 							} catch {}
 						}
-						this.emitExternalEvent({ type: "message_start", message: finalMessage });
-						this.emitExternalEvent({ type: "message_end", message: finalMessage });
+						// Buffer tool result with current text length for correct ordering later.
+						// Cursor executes tools server-side during streaming, so the assistant message
+						// already incorporates results. We buffer here and emit in correct order
+						// when the assistant message ends.
+						const textLength = this._getAssistantTextLength(this._state.streamMessage);
+						this._cursorToolResultBuffer.push({ toolResult: finalMessage, textLengthAtCall: textLength });
 						return finalMessage;
 					}
 				: undefined;
@@ -508,6 +525,12 @@ export class Agent {
 
 					case "message_end":
 						partial = null;
+						// Check if this is an assistant message with buffered Cursor tool results.
+						// If so, split the message to emit tool results at the correct position.
+						if (event.message.role === "assistant" && this._cursorToolResultBuffer.length > 0) {
+							this._emitCursorSplitAssistantMessage(event.message as AssistantMessage);
+							continue; // Skip default emit - split method handles everything
+						}
 						this._state.streamMessage = null;
 						this.appendMessage(event.message);
 						break;
@@ -595,6 +618,118 @@ export class Agent {
 	private emit(e: AgentEvent) {
 		for (const listener of this.listeners) {
 			listener(e);
+		}
+	}
+
+	/** Calculate total text length from an assistant message's content blocks */
+	private _getAssistantTextLength(message: AgentMessage | null): number {
+		if (!message || message.role !== "assistant" || !Array.isArray(message.content)) {
+			return 0;
+		}
+		let length = 0;
+		for (const block of message.content) {
+			if (block.type === "text") {
+				length += (block as TextContent).text.length;
+			}
+		}
+		return length;
+	}
+
+	/**
+	 * Emit a Cursor assistant message split around tool results.
+	 * This fixes the ordering issue where tool results appear after the full explanation.
+	 *
+	 * Output order: Assistant(preamble) -> ToolResults -> Assistant(continuation)
+	 */
+	private _emitCursorSplitAssistantMessage(assistantMessage: AssistantMessage): void {
+		const buffer = this._cursorToolResultBuffer;
+		this._cursorToolResultBuffer = [];
+
+		if (buffer.length === 0) {
+			// No tool results, emit normally
+			this._state.streamMessage = null;
+			this.appendMessage(assistantMessage);
+			this.emit({ type: "message_end", message: assistantMessage });
+			return;
+		}
+
+		// Find the split point: minimum text length at first tool call
+		const splitPoint = Math.min(...buffer.map((r) => r.textLengthAtCall));
+
+		// Extract text content from assistant message
+		const content = assistantMessage.content;
+		let fullText = "";
+		for (const block of content) {
+			if (block.type === "text") {
+				fullText += block.text;
+			}
+		}
+
+		// If no text or split point is 0 or at/past end, don't split
+		if (fullText.length === 0 || splitPoint <= 0 || splitPoint >= fullText.length) {
+			// Emit assistant message first, then tool results (original behavior but with buffered results)
+			this._state.streamMessage = null;
+			this.appendMessage(assistantMessage);
+			this.emit({ type: "message_end", message: assistantMessage });
+
+			// Emit buffered tool results
+			for (const { toolResult } of buffer) {
+				this.emit({ type: "message_start", message: toolResult });
+				this.appendMessage(toolResult);
+				this.emit({ type: "message_end", message: toolResult });
+			}
+			return;
+		}
+
+		// Split the text
+		const preambleText = fullText.slice(0, splitPoint);
+		const continuationText = fullText.slice(splitPoint);
+
+		// Create preamble message (text before tools)
+		const preambleContent = content.map((block) => {
+			if (block.type === "text") {
+				return { ...block, text: preambleText };
+			}
+			return block;
+		});
+		const preambleMessage: AssistantMessage = {
+			...assistantMessage,
+			content: preambleContent,
+		};
+
+		// Emit preamble
+		this._state.streamMessage = null;
+		this.appendMessage(preambleMessage);
+		this.emit({ type: "message_end", message: preambleMessage });
+
+		// Emit buffered tool results
+		for (const { toolResult } of buffer) {
+			this.emit({ type: "message_start", message: toolResult });
+			this.appendMessage(toolResult);
+			this.emit({ type: "message_end", message: toolResult });
+		}
+
+		// Emit continuation message (text after tools) if non-empty
+		const trimmedContinuation = continuationText.trim();
+		if (trimmedContinuation.length > 0) {
+			// Create continuation message with only text content (no thinking/toolCalls)
+			const continuationContent: TextContent[] = [{ type: "text", text: continuationText }];
+			const continuationMessage: AssistantMessage = {
+				...assistantMessage,
+				content: continuationContent,
+				// Zero out usage for continuation since it's part of same response
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			};
+			this.emit({ type: "message_start", message: continuationMessage });
+			this.appendMessage(continuationMessage);
+			this.emit({ type: "message_end", message: continuationMessage });
 		}
 	}
 }
